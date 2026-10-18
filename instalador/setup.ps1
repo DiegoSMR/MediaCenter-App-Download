@@ -261,6 +261,36 @@ function Get-QbtWebUrl($cfg) {
     return 'http://localhost:8080'
 }
 
+# Enlaces magnet y .torrent al qBittorrent de MediaCenter (2026-10-18). El
+# instalador de qBittorrent los registra como qbittorrent.exe "%1", SIN
+# perfil: con el de MediaCenter abierto (--profile=...), un magnet abria
+# OTRO qBittorrent con el perfil normal (solo hay una instancia por
+# perfil). Con --profile, se lo pasa al que ya esta abierto. En HKCU (este
+# usuario; se llama desde Start, que corre como el, no como administrador):
+# pisa lo de HKLM y una actualizacion de qBittorrent no lo deshace.
+$QbtProgIds = @('magnet', 'qBittorrent.Url.Magnet', 'qBittorrent.File.Torrent')
+function Set-QbtAsociaciones([string]$exe, [string]$perfil) {
+    if (-not $exe -or -not (Test-Path -LiteralPath $exe)) { return }
+    $cmd = "`"$exe`" --profile=`"$perfil`" `"%1`""
+    foreach ($c in $QbtProgIds) {
+        $k = "HKCU:\Software\Classes\$c\shell\open\command"
+        New-Item -Path $k -Force | Out-Null
+        Set-ItemProperty -LiteralPath $k -Name '(default)' -Value $cmd
+    }
+    Set-ItemProperty -LiteralPath 'HKCU:\Software\Classes\magnet' -Name '(default)' -Value 'URL:Magnet URI'
+    Set-ItemProperty -LiteralPath 'HKCU:\Software\Classes\magnet' -Name 'URL Protocol' -Value ''
+    Write-Paso 'Enlaces magnet y .torrent: se abren en el qBittorrent de MediaCenter.'
+}
+function Remove-QbtAsociaciones {
+    # Solo si son nuestras (llevan el perfil de MediaCenter): vuelve lo de HKLM.
+    foreach ($c in $QbtProgIds) {
+        $k = "HKCU:\Software\Classes\$c\shell\open\command"
+        if ((Get-ItemProperty -LiteralPath $k -ErrorAction SilentlyContinue).'(default)' -match 'qbittorrent-nativo') {
+            Remove-Item -LiteralPath "HKCU:\Software\Classes\$c" -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 function Test-Wsl {
     # Sin WSL, wsl.exe solo existe como "instalador" y --status falla.
     return (Invoke-Externo 'wsl.exe' '--status') -eq 0
@@ -657,6 +687,7 @@ function Invoke-Start {
         Start-Sleep -Seconds 3
     }
     Write-Paso 'qBittorrent funcionando.'
+    Set-QbtAsociaciones (Find-QBittorrent) (Join-Path ($cfg['CONFIG_ROOT'] -replace '/', '\') 'qbittorrent-nativo')
 
     # --- El stack
     Push-Location $App
@@ -791,6 +822,7 @@ function Invoke-Uninstall {
         Where-Object { $_.CommandLine -match 'qbittorrent-nativo' } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     foreach ($t in $TaskQbt, $TaskPanel, $TaskResume) { Unregister-ScheduledTask -TaskName $t -Confirm:$false -ErrorAction SilentlyContinue }
+    Remove-QbtAsociaciones
     Get-NetFirewallRule -DisplayName "$FwPrefix*" -ErrorAction SilentlyContinue | Remove-NetFirewallRule
     Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce' -Name $RunOnceName -ErrorAction SilentlyContinue
     $desk = [Environment]::GetFolderPath('Desktop')
