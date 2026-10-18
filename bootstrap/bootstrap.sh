@@ -322,6 +322,22 @@ case "$code" in
   *) log "AVISO: setPreferences qBittorrent -> HTTP $code: $(cat /tmp/resp)" ;;
 esac
 
+# Descargas propias (magnet/.torrent abiertos a mano, sin categoria) en
+# data/descargas, no en torrents/ (2026-10-18). En torrents/, el panel de
+# disco las tomaba por "fantasma, recuperable" y ofrecia borrarlas (un juego,
+# por ejemplo). Radarr/Sonarr no cambian: usan sus categorias. Solo con
+# qBittorrent nativo: el contenedor solo monta /data/torrents.
+# save_path_changed_tmm_enabled=false: lo que ya estaba no se mueve.
+if [ "$QBT_DATA_DIR" != "/data" ]; then
+  log "Descargas sin categoria -> $QBT_DATA_DIR/descargas ..."
+  code=$(curl -s -o /tmp/resp -w "%{http_code}" -b "$QBT_COOKIE" -X POST "$QBT_URL/api/v2/app/setPreferences" \
+    --data-urlencode "json={\"save_path\":\"$QBT_DATA_DIR/descargas\",\"save_path_changed_tmm_enabled\":false}")
+  case "$code" in
+    2*) ;;
+    *) log "AVISO: setPreferences save_path -> HTTP $code: $(cat /tmp/resp)" ;;
+  esac
+fi
+
 # ---------------------------------------------------------------------------
 # 3. Cliente de descargas (qBittorrent) en Radarr y Sonarr, con su categoría
 # ---------------------------------------------------------------------------

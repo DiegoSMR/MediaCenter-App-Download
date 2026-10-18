@@ -420,7 +420,7 @@ function Invoke-Install {
     $base = $a['DATADIR'].TrimEnd('\')
     $dataRoot = "$base\data"; $configRoot = "$base\config"; $backupRoot = "$base\backup"
     foreach ($d in "$dataRoot\torrents\movies", "$dataRoot\torrents\tv", "$dataRoot\torrents\incomplete",
-                   "$dataRoot\media\movies", "$dataRoot\media\tv", $configRoot, $backupRoot) {
+                   "$dataRoot\media\movies", "$dataRoot\media\tv", "$dataRoot\descargas", $configRoot, $backupRoot) {
         [void](New-Item -ItemType Directory -Force -Path $d)
     }
     $fwd = { param($p) $p -replace '\\', '/' }
@@ -522,7 +522,7 @@ function Invoke-Install {
         Write-Utf8 $ini (@(
             '[LegalNotice]', 'Accepted=true', '',
             '[BitTorrent]',
-            "Session\DefaultSavePath=$dr/torrents", "Session\TempPath=$dr/torrents/incomplete", 'Session\TempPathEnabled=true',
+            "Session\DefaultSavePath=$dr/descargas", "Session\TempPath=$dr/torrents/incomplete", 'Session\TempPathEnabled=true',
             "Session\Port=$torPort", 'Session\QueueingSystemEnabled=true', 'Session\MaxActiveDownloads=10',
             'Session\MaxActiveUploads=10', 'Session\MaxActiveTorrents=20', 'Session\IgnoreSlowTorrentsForQueueing=true',
             'Session\SlowTorrentsDownloadRate=10', 'Session\SlowTorrentsUploadRate=5',

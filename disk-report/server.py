@@ -1506,7 +1506,8 @@ def scan():
     ]
     for c in children(DATA):
         if c.is_dir() and c.name not in ("torrents", "media"):
-            folders.append({"key": f"data-{c.name}", "label": c.name, "bytes": size_of(under(c.path))})
+            label = "Descargas propias (descargas, sin categoría)" if c.name == "descargas" else c.name
+            folders.append({"key": f"data-{c.name}", "label": label, "bytes": size_of(under(c.path))})
     transcodes = os.path.join(CONFIG, "jellyfin", "cache", "transcodes")
     folders.append({"key": "config", "label": "Configuración de las apps", "bytes": config_total,
                     "note": f"Caché de transcodificación de Jellyfin: "
