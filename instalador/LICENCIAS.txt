@@ -1,0 +1,17 @@
+MediaCenter - programas de terceros incluidos en el instalador
+=============================================================
+
+qBittorrent (qbittorrent_*_x64_setup.exe)
+  Copyright (c) qBittorrent project. Licencia GNU GPL v2 o posterior.
+  Se incluye sin modificar, tal cual lo publica el proyecto en
+  https://www.qbittorrent.org (descargas en SourceForge).
+  Codigo fuente: https://github.com/qbittorrent/qBittorrent
+
+qrcode.js (QR Code Generator for JavaScript)
+  Copyright (c) 2009 Kazuhiko Arase. Licencia MIT.
+  https://github.com/kazuhikoarase/qrcode-generator
+
+El resto (Docker Desktop, WSL, y las aplicaciones de Docker: Jellyfin,
+Seerr, Radarr, Sonarr, Prowlarr, Bazarr, Recyclarr, Homer) NO va dentro:
+se descarga de sus fuentes oficiales durante la instalacion, con sus
+propias licencias.

@@ -1,0 +1,596 @@
+# =============================================================================
+# ARR STACK — doméstico, auto-configurado, sin exposición a Internet.
+#
+# Flujo: Jellyseerr -> Radarr/Sonarr -> Prowlarr (indexadores) -> qBittorrent
+#        -> biblioteca -> Jellyfin
+#
+# Todas las rutas dependientes de la máquina viven en .env (DATA_ROOT,
+# CONFIG_ROOT, BACKUP_ROOT, TZ). No hay ninguna ruta de Windows hardcodeada
+# aquí.
+#
+# RED: todos los servicios están en "arrnet" y se hablan entre sí por nombre
+# de servicio (http://radarr:7878, http://qbittorrent:8080, ...), nunca por
+# localhost.
+#
+# HARDLINKS: Radarr y Sonarr montan TODO ${DATA_ROOT} como un único volumen
+# /data (torrents + media dentro del mismo mount). Es la única forma de
+# garantizar que el hardlink al importar (en vez de copiar) funcione siempre,
+# independientemente de cómo Docker Desktop/WSL2 gestione bind mounts
+# separados. qBittorrent, Bazarr y Jellyfin solo montan la parte de /data que
+# necesitan (torrents o media), no todo.
+#
+# "bootstrap" conecta Prowlarr<->Radarr/Sonarr<->qBittorrent y genera
+# Homer/Recyclarr con las API keys reales. Lo único manual (ver README):
+# indexadores en Prowlarr, asistente inicial de Jellyfin/Jellyseerr, y
+# conectar Bazarr a Radarr/Sonarr.
+# =============================================================================
+
+x-common-env: &common-env
+  PUID: ${PUID:-1000}
+  PGID: ${PGID:-1000}
+  TZ: ${TZ:-Europe/Madrid}
+
+# Sin esto, el driver de logging por defecto de Docker (json-file) no tiene
+# techo -- un stack corriendo 24/7 durante meses puede acumular varios GB de
+# logs sin que aparezca ningun aviso en ninguna UI (encontrado real: ver
+# development/history/024-instalador-espacio-disco.md). 10MB x 3 ficheros =
+# 30MB por contenedor como mucho, suficiente para depurar sin descontrolarse.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+networks:
+  arrnet:
+    name: arrnet
+    driver: bridge
+
+services:
+
+  # ---------------------------------------------------------------------
+  # INSTALLER — asistente de instalación dockerizado, de un solo uso.
+  # Genera .env, arranca el resto del stack (necesita docker.sock para
+  # eso -- control de escritura sobre Docker mientras corre, igual que
+  # "bootstrap"), y termina imprimiendo el informe de qué queda a mano.
+  # No arranca solo con "docker compose up" -- se lanza a propósito con
+  # scripts\install.ps1 (o "docker compose run --rm -it installer").
+  # Ver development/specs/005-instalador-interactivo.md.
+  # ---------------------------------------------------------------------
+  installer:
+    build: ./installer
+    container_name: installer
+    restart: "no"
+    logging: *default-logging
+    stdin_open: true
+    tty: true
+    # Sin "profiles", "docker compose up" (sin -d ni --build tambien) lo
+    # arranca igual que al resto de servicios -- pero como no hay una
+    # terminal real adjunta (stdin_open mantiene stdin abierto en vez de
+    # cerrarlo/EOF), se queda colgado para siempre en el primer "read -rp"
+    # de install.sh, visible en "docker compose ps" como container activo
+    # sin hacer nada. Gatearlo detras de un profile que nadie activa por
+    # defecto es lo que hace que solo arranque cuando se le llama a
+    # proposito. "docker compose run installer" (usado por
+    # scripts\install.ps1) sigue funcionando sin cambios: "run" activa
+    # automaticamente los profiles del servicio que nombra.
+    profiles: ["installer"]
+    volumes:
+      - .:/repo
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  # ---------------------------------------------------------------------
+  # Precarga credenciales de qBittorrent ANTES de su primer arranque
+  # ---------------------------------------------------------------------
+  qbt-seed:
+    image: alpine:3.20
+    container_name: qbt-seed
+    restart: "no"
+    logging: *default-logging
+    # Sin esto, Compose le crea su propia red "<proyecto>_default" (no
+    # necesita ninguna, solo escribe ficheros de config) -- una red huerfana
+    # mas por cada instalacion nueva, sin motivo.
+    networks: [arrnet]
+    entrypoint: ["/bin/sh", "/seed/qbt-seed.sh"]
+    environment:
+      <<: *common-env
+    volumes:
+      - ./bootstrap/qbt-seed.sh:/seed/qbt-seed.sh:ro
+      - ${CONFIG_ROOT}/qbittorrent:/config
+      - ${DATA_ROOT}/torrents/incomplete:/incomplete-fast
+
+  # ---------------------------------------------------------------------
+  # qBITTORRENT — solo ve /data/torrents, no la biblioteca
+  # ---------------------------------------------------------------------
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: qbittorrent
+    restart: unless-stopped
+    logging: *default-logging
+    networks: [arrnet]
+    depends_on:
+      qbt-seed:
+        condition: service_completed_successfully
+    environment:
+      <<: *common-env
+      WEBUI_PORT: 8080
+    volumes:
+      - ${CONFIG_ROOT}/qbittorrent:/config
+      - ${DATA_ROOT}/torrents:/data/torrents
+      # Descargas EN CURSO -- bind mount de ${DATA_ROOT}, igual que el resto
+      # de /data/torrents (no un volumen nativo de WSL2, ni un disco aparte).
+      # Antes vivian en un volumen Docker nativo (~1.6GB/s de escritura vs.
+      # ~45MB/s de este bind mount, ver development/history/003-qbittorrent-
+      # rendimiento-almacenamiento.md) pero ese volumen crecia dentro del
+      # .vhdx de WSL2 sin limite util y sin devolver el espacio a Windows al
+      # borrarse (ver development/history/024-instalador-espacio-disco.md).
+      # Se probo brevemente un bind mount a un disco Windows aparte
+      # (QBT_INCOMPLETE_ROOT) para el mismo fin, pero se descarto en favor de
+      # reusar ${DATA_ROOT} directamente (mismo disco que el resto de
+      # /data/torrents, una variable de entorno menos). Al completarse,
+      # qBittorrent sigue copiando el archivo a /data/torrents/<categoria> y
+      # borrando la copia temporal de aqui.
+      - ${DATA_ROOT}/torrents/incomplete:/incomplete-fast
+    ports:
+      - "8080:8080"
+      - "6881:6881"
+      - "6881:6881/udp"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      # Primer arranque en un PC lento (VM de prueba, spec 039): Sonarr tardo
+      # mas de 2 min y compose up aborto. Los fallos de estos 5 min no cuentan;
+      # sano en cuanto responda, asi que en un PC rapido no cambia nada.
+      start_period: 5m
+
+  # ---------------------------------------------------------------------
+  # PROWLARR — solo gestión de indexadores, no toca archivos
+  # ---------------------------------------------------------------------
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+    container_name: prowlarr
+    restart: unless-stopped
+    logging: *default-logging
+    networks: [arrnet]
+    # DNS propio (spec 052): el de algunas operadoras devuelve 127.0.0.1 para
+    # indexadores como 1337x (bloqueo judicial, visto con Digi 2026-10-17).
+    # Los nombres de los servicios (radarr, flaresolverr...) siguen
+    # resolviendose por el DNS interno de Docker.
+    dns: [1.1.1.1, 9.9.9.9]
+    environment:
+      <<: *common-env
+    volumes:
+      - ${CONFIG_ROOT}/prowlarr:/config
+    ports:
+      - "9696:9696"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9696/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      # Primer arranque en un PC lento (VM de prueba, spec 039): Sonarr tardo
+      # mas de 2 min y compose up aborto. Los fallos de estos 5 min no cuentan;
+      # sano en cuanto responda, asi que en un PC rapido no cambia nada.
+      start_period: 5m
+
+  # ---------------------------------------------------------------------
+  # FLARESOLVERR — pasa la proteccion de Cloudflare ("Just a moment...")
+  # de algunos indexadores (spec 052: EZTV, 1337x). Prowlarr solo lo usa
+  # con los que llevan la etiqueta "flaresolverr". Elegido frente a Byparr
+  # el 2026-10-17: los dos pasaron EZTV, Kickass y 1337x, pero este es mas
+  # reciente (3.5.2, sep 2026) y su imagen pesa 735 MB frente a 2,4 GB.
+  # Sin puertos publicados: solo lo usa Prowlarr por la red interna.
+  # ---------------------------------------------------------------------
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    restart: unless-stopped
+    logging: *default-logging
+    networks: [arrnet]
+    dns: [1.1.1.1, 9.9.9.9]
+    environment:
+      TZ: ${TZ:-Europe/Madrid}
+      LOG_LEVEL: info
+
+  # ---------------------------------------------------------------------
+  # BACKUP — copia periodica de lo que no se reconstruye con "git clone":
+  # ${CONFIG_ROOT} (bases de datos de Radarr/Sonarr, historial de
+  # Jellyseerr, ajustes de qBittorrent...) y .env. docker-compose.yml/
+  # bootstrap/scripts NO se copian: ya estan en el propio repo git.
+  # network_mode: none -- solo toca ficheros, cero necesidad de red.
+  # ---------------------------------------------------------------------
+  backup:
+    build: ./backup
+    container_name: backup
+    restart: unless-stopped
+    logging: *default-logging
+    network_mode: none
+    environment:
+      BACKUP_INTERVAL_HOURS: ${BACKUP_INTERVAL_HOURS:-24}
+    volumes:
+      - ${CONFIG_ROOT}:/source/config:ro
+      - ./.env:/source/.env:ro
+      - ${BACKUP_ROOT}:/dest
+
+  # ---------------------------------------------------------------------
+  # DISK-REPORT — pagina "Espacio en disco" (enlazada desde Homer): peso de
+  # cada carpeta y archivos "fantasma" (descargas en torrents/ sin hardlink
+  # en la biblioteca, que ocupan espacio y Jellyfin no ve). Monta TODO
+  # ${DATA_ROOT} de una pieza, como Radarr/Sonarr, para ver los mismos
+  # inodos/contadores de enlaces. Todo en solo lectura salvo
+  # /data/torrents (boton "Borrar" de la pagina): fisicamente no puede
+  # tocar la biblioteca -- la X de "lo que mas ocupa" la borra
+  # Radarr/Sonarr por su API. Red: para preguntar a qBittorrent que torrents siguen cargados y a Radarr/Sonarr (API keys
+  # leidas de ${CONFIG_ROOT}) si la pelicula/serie de cada descarga esta en
+  # la biblioteca. Ver
+  # development/history/030-informe-espacio-disco.md.
+  # ---------------------------------------------------------------------
+  disk-report:
+    build: ./disk-report
+    container_name: disk-report
+    restart: unless-stopped
+    logging: *default-logging
+    networks: [arrnet]
+    # Version de MediaCenter (MC_VERSION, spec 051). Solo existe en lo
+    # instalado con el .exe o actualizado; en una copia de git no, y entonces
+    # el panel no ofrece actualizar MediaCenter.
+    env_file:
+      - path: ./version.env
+        required: false
+    environment:
+      DISK_REPORT_INTERVAL_HOURS: ${DISK_REPORT_INTERVAL_HOURS:-1}
+      # Importar solo lo que se ha quedado fuera de la biblioteca, cuando
+      # no hay duda (spec 024). "false" para desactivarlo.
+      DISK_REPORT_AUTO_IMPORT: ${DISK_REPORT_AUTO_IMPORT:-true}
+      # Solo si cambiaste la contrasena de qBittorrent (ver README).
+      QBT_USER: ${QBT_USER:-admin}
+      QBT_PASS: ${QBT_PASS:-adminadmin}
+      QBT_URL: ${QBT_URL:-http://qbittorrent:8080}
+      HOST_DATA_ROOT: ${QBT_DATA_DIR:-/data}
+      # Comprobacion de la instalacion (spec 049): lo que se eligio al instalar.
+      ARR_LOGIN: ${ARR_LOGIN:-0}
+      JELLYFIN_HWACCEL: ${JELLYFIN_HWACCEL:-}
+      # Parar/continuar descargas y descargas atascadas (spec 028): por
+      # debajo de este espacio libre se paran solas las descargas (se
+      # reanudan con 20 GB mas); una descarga sin fuentes durante estas
+      # horas aparece como atascada.
+      DISK_MIN_FREE_GB: ${DISK_MIN_FREE_GB:-50}
+      # El boton de Homer se acepta con Homer abierto por esta IP, por
+      # localhost o por la misma direccion que la tarjeta.
+      HOST_LAN_IP: ${HOST_LAN_IP:-}
+      STALLED_HOURS: ${STALLED_HOURS:-6}
+      # "Ya visto" (spec 040): lo visto en Jellyfin hace mas de estos dias
+      # sale en Pendiente con boton para borrarlo.
+      WATCHED_DAYS: ${WATCHED_DAYS:-30}
+    volumes:
+      - ${DATA_ROOT}:/data:ro
+      - ${DATA_ROOT}/torrents:/data/torrents
+      - ${CONFIG_ROOT}:/config:ro
+      # Estado de "descargas paradas" (spec 028), para que sobreviva a un
+      # reinicio. Carpeta propia: el resto de la configuracion sigue :ro.
+      - ${CONFIG_ROOT}/disk-report:/state
+    ports:
+      - "3001:8080"
+
+  # ---------------------------------------------------------------------
+  # DISK-CLEAN — borrado de descargas fantasma, SOLO a mano:
+  # scripts\borrar-fantasmas.ps1 (perfil "tools": "docker compose up" no lo
+  # arranca). Misma imagen que disk-report. /data en solo lectura con
+  # /data/torrents con escritura encima: fisicamente no puede tocar la
+  # biblioteca (/data/media). Ver disk-report/clean.py.
+  # ---------------------------------------------------------------------
+  disk-clean:
+    build: ./disk-report
+    profiles: ["tools"]
+    networks: [arrnet]
+    entrypoint: ["python3", "-u", "/app/clean.py"]
+    environment:
+      QBT_USER: ${QBT_USER:-admin}
+      QBT_PASS: ${QBT_PASS:-adminadmin}
+      QBT_URL: ${QBT_URL:-http://qbittorrent:8080}
+      HOST_DATA_ROOT: ${QBT_DATA_DIR:-/data}
+      # Comprobacion de la instalacion (spec 049): lo que se eligio al instalar.
+      ARR_LOGIN: ${ARR_LOGIN:-0}
+      JELLYFIN_HWACCEL: ${JELLYFIN_HWACCEL:-}
+    volumes:
+      - ${DATA_ROOT}:/data:ro
+      - ${DATA_ROOT}/torrents:/data/torrents
+      - ${CONFIG_ROOT}:/config:ro
+
+  # ---------------------------------------------------------------------
+  # RADARR — /data completo (torrents+media) para poder hardlinkear
+  # ---------------------------------------------------------------------
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    container_name: radarr
+    restart: unless-stopped
+    logging: *default-logging
+    networks: [arrnet]
+    environment:
+      <<: *common-env
+    volumes:
+      - ${CONFIG_ROOT}/radarr:/config
+      - ${DATA_ROOT}:/data
+    ports:
+      - "7878:7878"
+    depends_on:
+      prowlarr:
+        condition: service_healthy
+      qbittorrent:
+        condition: service_healthy
+        # No existe con qBittorrent nativo en Windows (spec 013).
+        required: false
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:7878/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      # Primer arranque en un PC lento (VM de prueba, spec 039): Sonarr tardo
+      # mas de 2 min y compose up aborto. Los fallos de estos 5 min no cuentan;
+      # sano en cuanto responda, asi que en un PC rapido no cambia nada.
+      start_period: 5m
+
+  # ---------------------------------------------------------------------
+  # SONARR — /data completo (torrents+media) para poder hardlinkear
+  # ---------------------------------------------------------------------
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: sonarr
+    restart: unless-stopped
+    logging: *default-logging
+    networks: [arrnet]
+    environment:
+      <<: *common-env
+    volumes:
+      - ${CONFIG_ROOT}/sonarr:/config
+      - ${DATA_ROOT}:/data
+    ports:
+      - "8989:8989"
+    depends_on:
+      prowlarr:
+        condition: service_healthy
+      qbittorrent:
+        condition: service_healthy
+        # No existe con qBittorrent nativo en Windows (spec 013).
+        required: false
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8989/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      # Primer arranque en un PC lento (VM de prueba, spec 039): Sonarr tardo
+      # mas de 2 min y compose up aborto. Los fallos de estos 5 min no cuentan;
+      # sano en cuanto responda, asi que en un PC rapido no cambia nada.
+      start_period: 5m
+
+  # ---------------------------------------------------------------------
+  # AUTO-CONFIGURACION — conecta Prowlarr/Radarr/Sonarr/qBittorrent,
+  # desactiva login en LAN para las tres, y genera Homer/Recyclarr.
+  # ---------------------------------------------------------------------
+  bootstrap:
+    build: ./bootstrap
+    container_name: bootstrap
+    restart: "no"
+    logging: *default-logging
+    networks: [arrnet]
+    depends_on:
+      radarr:
+        condition: service_healthy
+      sonarr:
+        condition: service_healthy
+      prowlarr:
+        condition: service_healthy
+      qbittorrent:
+        condition: service_healthy
+        # No existe con qBittorrent nativo en Windows (spec 013).
+        required: false
+      bazarr:
+        condition: service_started
+    environment:
+      HOST_LAN_IP: ${HOST_LAN_IP:-localhost}
+      JELLYFIN_API_KEY: ${JELLYFIN_API_KEY:-}
+      # qBittorrent en Docker (por defecto) o nativo en Windows (spec 013).
+      QBT_URL: ${QBT_URL:-http://qbittorrent:8080}
+      QBT_DATA_DIR: ${QBT_DATA_DIR:-/data}
+      # Las que eligio el usuario en el instalador (spec 039); si no, las
+      # de qbt-seed.sh.
+      QBT_USER: ${QBT_USER:-admin}
+      QBT_PASS: ${QBT_PASS:-adminadmin}
+      # Login en Radarr/Sonarr/Prowlarr: 1 = con el usuario del instalador
+      # (MC_USER/MC_PASSWORD, los de Jellyfin); otra cosa = sin login.
+      ARR_LOGIN: ${ARR_LOGIN:-0}
+      MC_USER: ${MC_USER:-}
+      MC_PASSWORD: ${MC_PASSWORD:-}
+      # "nvenc" si el instalador detecto GPU NVIDIA (aceleracion en Jellyfin).
+      JELLYFIN_HWACCEL: ${JELLYFIN_HWACCEL:-}
+    volumes:
+      - ${CONFIG_ROOT}:/hostconfig
+
+  # ---------------------------------------------------------------------
+  # FIRSTRUN — lo que antes eran pasos manuales tras instalar (spec 039):
+  # asistentes de Jellyfin y Seerr, Radarr/Sonarr -> Jellyfin, The Pirate
+  # Bay en Prowlarr y OpenSubtitles en Bazarr. Solo lo lanza el instalador
+  # (perfil "firstrun"): docker compose --profile firstrun run --rm firstrun.
+  # Idempotente; sin MC_USER/MC_PASSWORD no hace nada.
+  # ---------------------------------------------------------------------
+  firstrun:
+    build: ./bootstrap
+    profiles: ["firstrun"]
+    entrypoint: ["/firstrun.sh"]
+    networks: [arrnet]
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+      jellyfin:
+        condition: service_healthy
+      jellyseerr:
+        condition: service_started
+    environment:
+      HOST_LAN_IP: ${HOST_LAN_IP:-localhost}
+      MC_USER: ${MC_USER:-}
+      MC_PASSWORD: ${MC_PASSWORD:-}
+      # "nvenc" si el instalador detecto GPU NVIDIA (aceleracion en Jellyfin).
+      JELLYFIN_HWACCEL: ${JELLYFIN_HWACCEL:-}
+      # Idioma de los menus de las apps (instalador): en (por defecto) o es.
+      UI_LANG: ${UI_LANG:-en}
+      OPENSUBTITLES_USER: ${OPENSUBTITLES_USER:-}
+      OPENSUBTITLES_PASSWORD: ${OPENSUBTITLES_PASSWORD:-}
+    volumes:
+      - ${CONFIG_ROOT}:/hostconfig
+
+  # ---------------------------------------------------------------------
+  # RECYCLARR — perfiles de calidad TRaSH Guides para Radarr/Sonarr.
+  # Config generada por "bootstrap"; se re-sincroniza sola periódicamente.
+  # ---------------------------------------------------------------------
+  recyclarr:
+    image: ghcr.io/recyclarr/recyclarr:8
+    container_name: recyclarr
+    restart: unless-stopped
+    logging: *default-logging
+    networks: [arrnet]
+    environment:
+      TZ: ${TZ:-Europe/Madrid}
+    volumes:
+      - ${CONFIG_ROOT}/recyclarr:/config
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+
+  # ---------------------------------------------------------------------
+  # BAZARR — subtítulos. Solo ve /data/media (no torrents). Conexión a
+  # Radarr/Sonarr: manual, 30s en su interfaz (ver README).
+  # ---------------------------------------------------------------------
+  bazarr:
+    image: lscr.io/linuxserver/bazarr:latest
+    container_name: bazarr
+    restart: unless-stopped
+    logging: *default-logging
+    networks: [arrnet]
+    environment:
+      <<: *common-env
+    volumes:
+      - ${CONFIG_ROOT}/bazarr:/config
+      - ${DATA_ROOT}/media:/data/media
+    ports:
+      - "6767:6767"
+    depends_on:
+      radarr:
+        condition: service_healthy
+      sonarr:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------
+  # JELLYFIN — reproducción. Monta /data/media en lectura-escritura
+  # (era :ro hasta el 2026-08-24: borrar desde la propia UI de Jellyfin
+  # fallaba siempre a nivel de sistema de archivos, aunque el usuario
+  # tuviera "Allow media deletion" activado en su perfil -- ese permiso
+  # es solo a nivel de app, no compensa un mount de solo lectura).
+  # OJO: borrar un episodio/película desde Jellyfin NO avisa a Sonarr/
+  # Radarr -- si el título sigue "monitored" ahí, su próximo escaneo de
+  # disco lo vera "missing" y puede volver a descargarlo solo. Para
+  # borrar de verdad sin que reaparezca, desmonitorizar en Sonarr/Radarr
+  # primero (o borrar desde ahí en vez de desde Jellyfin).
+  # Asistente inicial: manual, ver README.
+  # Transcodificación por GPU (NVENC/NVDEC): ver
+  # development/specs/015-jellyfin-gpu-nvenc.md -- verificado que la RTX
+  # 4070 de esta máquina y la imagen ya soportan esto sin cambios.
+  # ---------------------------------------------------------------------
+  jellyfin:
+    image: lscr.io/linuxserver/jellyfin:latest
+    container_name: jellyfin
+    restart: unless-stopped
+    logging: *default-logging
+    networks: [arrnet]
+    environment:
+      <<: *common-env
+    # GPU NVIDIA: NO aqui (spec 039). En un PC sin NVIDIA, reservarla impide
+    # que Jellyfin arranque. Va en docker-compose.override.yml: el de este
+    # PC la reserva (RTX 4070), y el instalador la anade solo si detecta una.
+    volumes:
+      - ${CONFIG_ROOT}/jellyfin:/config
+      - ${DATA_ROOT}/media:/data/media
+    ports:
+      - "8096:8096"
+      - "8920:8920"
+      - "7359:7359/udp"
+      - "1900:1900/udp"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8096/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      # Primer arranque en un PC lento (VM de prueba, spec 039): Sonarr tardo
+      # mas de 2 min y compose up aborto. Los fallos de estos 5 min no cuentan;
+      # sano en cuanto responda, asi que en un PC rapido no cambia nada.
+      start_period: 5m
+
+  # ---------------------------------------------------------------------
+  # SEERR (antes Jellyseerr) — interfaz de búsqueda/solicitud. No toca
+  # archivos. Asistente inicial: manual, ver README (depende de que
+  # Jellyfin ya tenga su usuario admin creado).
+  # Jellyseerr se fusionó con Overseerr en Seerr (feb. 2026) y su imagen
+  # (fallenbagel/jellyseerr) no se actualiza desde agosto de 2025. Seerr
+  # migra solo los datos de Jellyseerr al arrancar (spec 037). El servicio,
+  # el contenedor y la carpeta se siguen llamando "jellyseerr" a propósito:
+  # bootstrap.sh y disk-report lo usan por ese nombre (http://jellyseerr:5055,
+  # ${CONFIG_ROOT}/jellyseerr/settings.json). Seerr se ejecuta como el
+  # usuario node (1000) y pide init: true. La carpeta de config debe ser
+  # suya: si no, se cae en bucle con EACCES en /app/config/logs. Docker la
+  # crea como root en una instalacion nueva, por eso seerr-permisos (una
+  # sola vez por arranque, como qbt-seed) la pone a 1000:1000 antes.
+  # ---------------------------------------------------------------------
+  seerr-permisos:
+    image: alpine:3.20
+    container_name: seerr-permisos
+    restart: "no"
+    logging: *default-logging
+    networks: [arrnet]
+    command: ["chown", "-R", "1000:1000", "/cfg"]
+    volumes:
+      - ${CONFIG_ROOT}/jellyseerr:/cfg
+
+  jellyseerr:
+    image: ghcr.io/seerr-team/seerr:latest
+    container_name: jellyseerr
+    init: true
+    restart: unless-stopped
+    logging: *default-logging
+    networks: [arrnet]
+    environment:
+      TZ: ${TZ:-Europe/Madrid}
+    volumes:
+      - ${CONFIG_ROOT}/jellyseerr:/app/config
+    ports:
+      - "5055:5055"
+    depends_on:
+      seerr-permisos:
+        condition: service_completed_successfully
+      jellyfin:
+        condition: service_healthy
+      radarr:
+        condition: service_healthy
+      sonarr:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------
+  # HOMER — panel central, generado por "bootstrap". Solo enlaces (sin
+  # widgets con datos en vivo, a cambio de no necesitar docker.sock ni
+  # root -- ver development/history/026-sustituir-homepage-por-homer.md).
+  # ---------------------------------------------------------------------
+  homer:
+    image: b4bz/homer:latest
+    container_name: homer
+    restart: unless-stopped
+    logging: *default-logging
+    networks: [arrnet]
+    environment:
+      <<: *common-env
+    volumes:
+      - ${CONFIG_ROOT}/homer:/www/assets
+    ports:
+      - "3000:8080"
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully

@@ -1,0 +1,20 @@
+# Secretos y config real de esta máquina — nunca subir.
+.env
+.env.*.local
+
+# Repos independientes con su propio git aparte (no anidar).
+seeder-proxy/
+
+# Estado interno de Claude Code (permisos locales, etc.) — no es parte
+# del proyecto. Excepción: .claude/skills/ sí son herramientas reales
+# del flujo de desarrollo de este repo (ver development/README.md).
+.claude/*
+!.claude/skills/
+
+# Ficheros de sistema.
+Thumbs.db
+.DS_Store
+installer-exe/staging/
+installer-exe/Output/
+installer-exe/vendor/
+installer-exe/publicar-repo/

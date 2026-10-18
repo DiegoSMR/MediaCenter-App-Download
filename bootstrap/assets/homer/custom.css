@@ -1,0 +1,260 @@
+/* ==========================================================================
+   Tema propio de MediaCenter para Homer (generado/copiado por bootstrap --
+   editar bootstrap/assets/homer/custom.css, no la copia en CONFIG_ROOT).
+
+   Homer carga sus propios estilos dentro de @layer (framework/base/theme);
+   este fichero va SIN layer, asi que gana siempre sin necesitar !important.
+   Los colores base (--background, --card-background, --highlight-*...)
+   vienen de "colors:" en config.yml; aqui solo forma, tamanos y detalles.
+   ========================================================================== */
+
+#app {
+  font-family: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+  --radius: 1rem;
+  --accent-a: #7c6cff;
+  --accent-b: #e0529c;
+}
+
+/* Fondo con dos manchas de color suaves, en vez de un gris plano. Tema
+   unico oscuro: sin barra superior no hay interruptor claro/oscuro. */
+#app {
+  background:
+    radial-gradient(1100px 500px at 0% 0%, rgba(124, 108, 255, 0.16), transparent 60%),
+    radial-gradient(900px 500px at 100% 100%, rgba(224, 82, 156, 0.10), transparent 60%),
+    var(--background);
+  background-attachment: fixed;
+  min-height: 100vh;
+}
+
+/* --- Cabecera: sin la barra de color solida por defecto, y con una linea
+       fina debajo (no hay barra de navegacion que la separe) ------------ */
+#bighead .first-line {
+  background: transparent;
+  border-bottom: 1px solid rgba(127, 127, 127, 0.18);
+  padding-bottom: 1rem;
+  color: var(--text-title);
+}
+#bighead .first-line .container {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 96px;
+  padding-top: 1.25rem;
+}
+/* flex: none -- sin esto el contenedor del logo se encoge a 0 dentro del
+   flex y el <img> (max-width: 100% de Bulma) desaparece. */
+#bighead .first-line .logo {
+  flex: none;
+  float: none;
+  width: 64px;
+  margin-right: 0.75rem;
+}
+#bighead .first-line .logo img {
+  display: block;
+  width: 64px;
+  height: 64px;
+  max-width: none;
+  max-height: none;
+  padding: 0;
+}
+#bighead .first-line h1 {
+  margin-top: 0;
+  font-size: 1.9rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+#bighead .first-line .headline {
+  display: block;
+  font-size: 0.95rem;
+  opacity: 0.7;
+}
+#bighead .dashboard-title {
+  padding-top: 0;
+}
+
+/* --- Titulos de grupo ---------------------------------------------------- */
+#main-section h2.group-title {
+  margin-top: 1rem;
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-subtitle);
+}
+#main-section h2.group-title i {
+  color: var(--accent-a);
+}
+
+/* --- Tarjetas: mas altas y con mas aire (movil/tele) -------------------- */
+#main-section .card {
+  border-radius: var(--radius);
+  border: 1px solid rgba(127, 127, 127, 0.14);
+  box-shadow: 0 6px 24px -8px var(--card-shadow);
+}
+#main-section .card:hover {
+  transform: translateY(-3px);
+  border-color: rgba(124, 108, 255, 0.55);
+  box-shadow: 0 10px 30px -10px rgba(124, 108, 255, 0.45);
+}
+#main-section .card-content {
+  height: auto;
+  min-height: 96px;
+  padding: 1.25rem 1.4rem;
+  display: flex;
+  align-items: center;
+}
+#main-section .card-content > * {
+  width: 100%;
+}
+#main-section .media {
+  align-items: center;
+}
+#main-section .media-left .image {
+  width: 52px;
+  height: 52px;
+}
+#main-section .title {
+  font-size: 1.15em;
+  font-weight: 600;
+}
+#main-section .subtitle {
+  opacity: 0.75;
+  white-space: normal;
+}
+
+/* En la vista por columnas Homer pega las tarjetas de un grupo como un
+   bloque unico; aqui van separadas, cada una con sus esquinas. */
+#main-section .layout-vertical .card,
+#main-section .layout-vertical .column div:first-of-type .card,
+#main-section .layout-vertical .column div:last-child .card {
+  border-radius: var(--radius);
+}
+#main-section .layout-vertical .card {
+  margin-bottom: 0.9rem;
+}
+
+/* --- Grupo destacado ("Ver"): tarjetas mas grandes y con color ----------- */
+#main-section .featured .card {
+  background:
+    linear-gradient(135deg, rgba(124, 108, 255, 0.22), rgba(224, 82, 156, 0.14)),
+    var(--card-background);
+}
+#main-section .featured .card-content {
+  min-height: 124px;
+}
+#main-section .featured .media-left .image {
+  width: 68px;
+  height: 68px;
+}
+#main-section .featured .title {
+  font-size: 1.45em;
+}
+
+/* --- Indicador de estado (tarjetas "Ping"): solo el punto, sin el texto
+       "online"/"offline" en ingles ------------------------------------ */
+#main-section .status {
+  font-size: 0;
+}
+#main-section .status:before {
+  width: 12px;
+  height: 12px;
+  margin-right: 0;
+  border-radius: 50%;
+}
+
+/* --- Mensaje de bienvenida ----------------------------------------------- */
+#main-section .message {
+  margin-top: 1.5rem;
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+/* --- Tarjeta "Disco" (spec 028): la manda disk-report (/api/homer) -------
+       Mismo aspecto que la tarjeta "Disco" de la pagina de disk-report.
+       Homer la pinta siempre encima de los servicios (mismo div padre);
+       el usuario la quiere debajo: flex + order. */
+#main-section > .container > div {
+  display: flex;
+  flex-direction: column;
+}
+#main-section .message {
+  order: 1;
+  margin-bottom: 0;
+  background: var(--card-background);
+  box-shadow: 0 2px 15px 0 var(--card-shadow);
+}
+#main-section .message-header {
+  background: transparent;
+  color: var(--text-title);
+  font-size: 1.05rem;
+  padding: 1rem 1.25rem 0;
+}
+#main-section .message-body {
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  padding: 0.75rem 1.25rem 1.1rem;
+}
+.mc-kpis { display: flex; flex-wrap: wrap; gap: 0.5rem 2.5rem; }
+.mc-kpis b { display: block; font-size: 1.9rem; line-height: 1.15; color: var(--text-title); }
+.mc-kpis small { color: var(--text-subtitle); font-size: 0.9rem; }
+.mc-kpis .mc-ghost b { color: var(--accent-b); }
+.mc-bar {
+  display: flex;
+  height: 22px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: #1f2230;
+  margin: 0.9rem 0 0.75rem;
+}
+.mc-legend { display: flex; flex-wrap: wrap; gap: 0.5rem 1.1rem; font-size: 0.9rem; }
+.mc-legend i {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.mc-legend i.mc-free { background: #1f2230; outline: 1px solid rgba(127, 127, 127, 0.3); }
+.mc-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1.25rem;
+  margin-top: 1rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid rgba(127, 127, 127, 0.18);
+}
+.mc-dl { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem; color: var(--text-subtitle); }
+.mc-dl.is-paused span { color: #f5b041; }
+.mc-dl button {
+  font: inherit;
+  font-size: 0.9rem;
+  color: #fff;
+  background: #ef5b5b;
+  border: 0;
+  border-radius: 999px;
+  padding: 0.35rem 1rem;
+  cursor: pointer;
+}
+.mc-dl.is-paused button { background: var(--accent-a); }
+.mc-dl button:disabled { opacity: 0.6; cursor: default; }
+.mc-dl button:focus-visible { outline: 2px solid var(--highlight-secondary); outline-offset: 2px; }
+.mc-foot a { color: var(--link); }
+.mc-foot a.mc-bad { color: #ef5b5b; font-weight: 600; }
+.mc-err { flex-basis: 100%; color: #ef5b5b; font-size: 0.85rem; }
+/* Bloqueos de LaLiga (spec 050) */
+.mc-futbol { flex-basis: 100%; margin-bottom: 0.5rem; padding: 0.4rem 0.6rem; border-radius: 6px;
+  background: rgba(239, 91, 91, 0.15); border: 1px solid #ef5b5b; font-weight: 600; }
+
+/* Movil: Bulma deja el .container de la cabecera sin margen lateral. */
+@media screen and (max-width: 768px) {
+  #bighead .first-line .container {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+}
+#main-section .message-header p,
+.mc-kpis b { font-weight: 700; }

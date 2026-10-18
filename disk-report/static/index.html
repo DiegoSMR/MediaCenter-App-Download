@@ -1,0 +1,996 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Espacio en disco</title>
+<style>
+  /* Temas (spec 032). "Oscuro" es la paleta del dashboard (heredoc de Homer
+     en bootstrap.sh) y el predeterminado; el script de abajo pone data-theme. */
+  :root {
+    color-scheme: dark;
+    --bg: #0d0e14;
+    --card: #181a24;
+    --card-2: #1f2230;
+    --line: rgba(127, 127, 127, 0.18);
+    --text: #e6e6ef;
+    --title: #f4f4fb;
+    --muted: #a3a3b8;
+    --accent: #7c6cff;
+    --accent-2: #9a8dff;
+    --on-accent: #fff;
+    --pink: #e0529c;
+    --ok: #3ecf8e;
+    --warn: #f5b041;
+    --bad: #ef5b5b;
+    --seg-config: #4aa3c7;
+    --seg-other: #555a6e;
+    --shadow: rgba(0, 0, 0, 0.45);
+    --radius: 1rem;
+  }
+  /* Menos contraste: fondo gris en vez de casi negro, texto sin blanco puro
+     y colores desaturados. */
+  :root[data-theme="suave"] {
+    --bg: #23262d;
+    --card: #2b2f37;
+    --card-2: #353a43;
+    --line: rgba(255, 255, 255, 0.08);
+    --text: #cfd3da;
+    --title: #e4e6ea;
+    --muted: #959ba5;
+    --accent: #8a9bd4;
+    --accent-2: #a6b3de;
+    --on-accent: #1d2027;
+    --pink: #cf8fae;
+    --ok: #8cc4a0;
+    --warn: #d6b47a;
+    --bad: #d98c8c;
+    --seg-config: #7fb0c4;
+    --seg-other: #60656f;
+    --shadow: rgba(0, 0, 0, 0.35);
+  }
+  :root[data-theme="claro"] {
+    color-scheme: light;
+    --bg: #f5f5f8;
+    --card: #ffffff;
+    --card-2: #e6e6ee;
+    --line: rgba(20, 20, 40, 0.12);
+    --text: #25252f;
+    --title: #111118;
+    --muted: #62627a;
+    --accent: #5b4be0;
+    --accent-2: #4b3cc9;
+    --on-accent: #fff;
+    --pink: #c2367f;
+    --ok: #1c8a57;
+    --warn: #a86a0c;
+    --bad: #cc3b3b;
+    --seg-config: #2f86ab;
+    --seg-other: #9a9db0;
+    --shadow: rgba(20, 20, 40, 0.15);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+    color: var(--text);
+    background: var(--bg);
+    min-height: 100vh;
+  }
+  main { max-width: 900px; margin: 0 auto; padding: 24px 16px 64px; }
+  header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+  h1 { margin: 0; font-size: 1.5rem; color: var(--title); }
+  h2 { margin: 0; font-size: 1.1rem; color: var(--title); }
+  .sub { color: var(--muted); font-size: 0.88rem; }
+  a { color: var(--accent-2); }
+  /* Estilo plano (prueba): botones con borde, sin relleno salvo al pasar por encima. */
+  button {
+    font: inherit; color: var(--accent-2); background: none; border: 1px solid var(--accent); border-radius: 8px;
+    padding: 6px 14px; cursor: pointer;
+  }
+  button:hover { background: var(--accent); color: var(--on-accent); }
+  button:disabled { opacity: 0.5; cursor: default; }
+  button:focus { outline: none; }
+  button:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+  button.link { background: none; color: var(--accent-2); padding: 4px 0; border: 0; }
+  button.link:hover { background: none; color: var(--title); }
+  button.small { padding: 3px 10px; font-size: 0.85rem; }
+  button.link.small { padding: 5px 0; }
+  button.danger { color: var(--bad); border-color: var(--bad); }
+  button.danger:hover { background: var(--bad); color: var(--on-accent); }
+  /* Secciones separadas por una linea, sin tarjetas. */
+  .card { padding: 20px 0; border-top: 1px solid var(--line); }
+  .card-head { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: baseline; justify-content: space-between; margin-bottom: 8px; }
+  .banner { border-radius: 8px; padding: 14px 18px; margin-bottom: 18px; font-weight: 600; }
+  .banner.bad { background: color-mix(in srgb, var(--bad) 15%, transparent); border: 1px solid var(--bad); }
+  .banner.info { background: color-mix(in srgb, var(--accent) 12%, transparent); border: 1px solid var(--accent); font-weight: 400; }
+
+  /* Disco */
+  .free { font-size: 1.05rem; }
+  .free b { font-size: 1.5rem; color: var(--title); }
+  .stack { display: flex; height: 8px; border-radius: 999px; overflow: hidden; background: var(--card-2); margin: 10px 0 8px; }
+  .stack span { display: block; height: 100%; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 0.82rem; color: var(--muted); }
+  .legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
+
+  /* Tablas */
+  table { width: 100%; border-collapse: collapse; font-size: 0.93rem; table-layout: fixed; }
+  th { text-align: left; color: var(--muted); font-weight: 500; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+  td { padding: 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; width: 6.5em; }
+  tr:last-child td { border-bottom: 0; }
+  .name { overflow-wrap: anywhere; }
+  .files { margin: 6px 0 0; padding-left: 18px; color: var(--muted); font-size: 0.85rem; }
+  .bar { height: 2px; background: var(--line); margin-top: 5px; overflow: hidden; }
+  .bar span { display: block; height: 100%; background: var(--accent); }
+  /* Estado como texto de color, sin pastilla. */
+  .badge { display: inline; font-size: 0.8rem; margin: 0 10px 0 0; color: var(--muted); }
+  .badge.ghost { color: var(--pink); }
+  .badge.partial { color: var(--warn); }
+  .badge.recent { color: var(--accent-2); }
+  .badge.ok { color: var(--ok); }
+  .when { color: var(--muted); font-size: 0.78rem; }
+  .bad-text { color: var(--bad); }
+  td.xcol { width: 2.4em; padding-left: 0; text-align: right; }
+  button.x { background: none; color: var(--muted); border: 0; border-radius: 6px;
+             width: 1.9em; height: 1.9em; padding: 0; font-size: 0.8rem; line-height: 1; }
+  button.x:hover { background: var(--bad); color: var(--on-accent); border-color: var(--bad); }
+  .actions { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; margin-top: 6px; font-size: 0.85rem; color: var(--muted); }
+  .actions input { accent-color: var(--accent); vertical-align: middle; }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
+  .seg { display: inline-flex; gap: 14px; }
+  .seg button { background: none; border: 0; border-bottom: 2px solid transparent; border-radius: 0; color: var(--muted); padding: 2px 0; font-size: 0.88rem; }
+  .seg button:hover { background: none; color: var(--title); }
+  .seg button.on { color: var(--title); border-bottom-color: var(--accent); }
+  ul.warn { color: var(--warn); margin: 4px 0 8px; padding-left: 18px; }
+  dialog { background: var(--card); color: var(--text); border: 1px solid var(--line); border-radius: var(--radius);
+           max-width: min(640px, calc(100vw - 32px)); max-height: 80vh; padding: 20px; }
+  dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
+  dialog .files { max-height: 45vh; overflow: auto; }
+  .dialog-actions { display: flex; justify-content: flex-end; gap: 18px; margin-top: 12px; }
+  details summary { cursor: pointer; color: var(--muted); font-size: 0.85rem; margin-top: 4px; }
+  details.more > summary { font-size: 1rem; color: var(--title); margin: 0; }
+  details.more h3 { font-size: 0.95rem; color: var(--title); margin: 18px 0 4px; }
+  .empty { color: var(--muted); padding: 8px 0; }
+  /* Tooltip de informacion: raton (hover) o toque/teclado (focus). */
+  .info { position: relative; display: inline-block; vertical-align: middle; margin-left: 6px; }
+  .info > button { background: none; color: var(--muted); border: 1px solid var(--line); width: 1.35rem; height: 1.35rem;
+                   padding: 0; font-size: 0.75rem; font-weight: 600; line-height: 1; border-radius: 999px; }
+  .info > button { border-radius: 999px; }
+  .info > button:hover { color: var(--title); background: none; }
+  .info .tip { display: none; position: absolute; z-index: 5; left: 0; top: 1.8rem; width: min(320px, calc(100vw - 64px));
+               background: var(--card-2); color: var(--text); border: 1px solid var(--line); border-radius: 10px;
+               padding: 10px 12px; font-size: 0.83rem; font-weight: 400; line-height: 1.45; box-shadow: 0 8px 24px var(--shadow); }
+  .info:hover .tip, .info:focus-within .tip { display: block; }
+  @media (max-width: 640px) {
+    h1 { font-size: 1.3rem; }
+    td.num, th.num { width: 5.5em; }
+  }
+  .head-tools { display: flex; gap: 10px; align-items: center; }
+  select { font: inherit; font-size: 0.85rem; color: var(--text); background: var(--bg); border: 1px solid var(--line);
+           border-radius: 8px; padding: 5px 8px; cursor: pointer; }
+</style>
+<script>
+// Tema elegido (spec 032), antes de pintar para que no parpadee. Solo en este navegador.
+const THEMES = ["oscuro", "suave", "claro"];
+function setTheme(t) {
+  if (!THEMES.includes(t)) t = "oscuro";
+  document.documentElement.dataset.theme = t;
+  return t;
+}
+try { setTheme(localStorage.getItem("disk-report-theme")); } catch (e) { setTheme(); }
+</script>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>Espacio en disco</h1>
+      <div class="sub" id="meta">Cargando…</div>
+    </div>
+    <div class="head-tools">
+      <select id="theme" aria-label="Tema">
+        <option value="oscuro">Oscuro</option>
+        <option value="suave">Oscuro suave</option>
+        <option value="claro">Claro</option>
+      </select>
+      <button id="rescan">Volver a escanear</button>
+    </div>
+  </header>
+
+  <div id="banner"></div>
+  <div id="notice"></div>
+  <div id="content"></div>
+</main>
+
+<dialog id="confirm">
+  <h2>¿Seguro?</h2>
+  <div id="confirm-body"></div>
+  <div class="dialog-actions">
+    <button class="small link" id="confirm-cancel">Cancelar</button>
+    <button class="small danger" id="confirm-ok">Sí, seguir</button>
+  </div>
+</dialog>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+
+function fmt(n) {
+  const u = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0;
+  while (Math.abs(n) >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return (i === 0 ? n : n.toFixed(n >= 100 ? 0 : 1)).toString().replace(".", ",") + " " + u[i];
+}
+function ago(ts) {
+  const s = Math.round(Date.now() / 1000 - ts);
+  if (s < 90) return "hace un momento";
+  if (s < 5400) return `hace ${Math.round(s / 60)} min`;
+  if (s < 86400 * 2) return `hace ${Math.round(s / 3600)} h`;
+  return `hace ${Math.round(s / 86400)} días`;
+}
+const pct = (x) => x.toFixed(1).replace(".", ",");
+// Icono (i) con la explicacion de una seccion (html de confianza, escrito aqui).
+const info = (html) => `<span class="info"><button type="button" aria-label="Qué es esto">i</button><span class="tip" role="tooltip">${html}</span></span>`;
+const badge = (cls, t) => `<span class="badge ${cls}">${esc(t)}</span>`;
+
+// Estado de qBittorrent: solo se muestra si es raro (el resto lo dice la confirmacion).
+function qbtBadge(q) {
+  if (!q) return "";
+  if (q.state === "missingFiles") return badge("partial", "qBittorrent: faltan archivos");
+  if (q.state === "error") return badge("partial", "qBittorrent: error");
+  if (/DL$|^downloading$|^metaDL$/.test(q.state || "")) return badge("", `Descargando (${Math.round((q.progress || 0) * 100)}%)`);
+  return "";
+}
+
+// Que dice Radarr/Sonarr de la descarga, en una etiqueta.
+function arrBadge(a) {
+  if (!a) return badge("", "Descarga manual (Radarr/Sonarr no la conocen)");
+  const app = a.app === "radarr" ? "Radarr" : "Sonarr";
+  if (a.verdict === "replaced") return badge("ok", "Ya hay otra versión en la biblioteca");
+  if (a.verdict === "gone") return badge("", `Ya no está en ${app}`);
+  if (a.verdict === "error") return badge("", `${app} no responde`);
+  if (a.verdict === "doubtful") return badge("partial", `${a.doubtful.length} vídeo(s) que ${app} no reconoce: revísalos a mano`);
+  if (a.app === "sonarr" && a.episodes_missing !== a.episodes)
+    return badge("ghost", `Fuera de Jellyfin: faltan ${a.episodes_missing} de ${a.episodes} episodios`);
+  return badge("ghost", "Fuera de Jellyfin");
+}
+
+// Titulo reconocido por Radarr/Sonarr, con el nombre de la descarga debajo.
+function titleCell(title, year, name) {
+  return title ? `${esc(title)}${year ? ` (${year})` : ""}<div class="sub">${esc(name)}</div>` : esc(name);
+}
+
+let serviceInfo = {};
+let stalled = {stalled: []};
+let stalledByHash = {};
+// Seleccion para borrar, por ruta: sobrevive a los refrescos periodicos.
+const selected = new Set();
+let ghostsByPath = {};
+// Estado de la vista que tambien sobrevive a los refrescos.
+const view = {top: "movies", pending: "todo", showAll: new Set(), open: new Set()};
+
+// --- Pendiente: importar, atascadas y fantasmas en una sola lista ---------
+// Borrar sin tener que rescatarla (spec 033): Radarr/Sonarr dejan de buscarla.
+const stopDel = (g) => `<button class="small danger" data-del="${esc(g.path)}">Borrar y dejar de buscarla</button>`;
+
+function importRow(g) {
+  const action = g.import_blocked
+    ? `<div class="sub">No se puede importar sola: ${esc(g.import_blocked)}</div><div class="actions">${stopDel(g)}</div>`
+    : `<div class="actions"><button class="small" data-imp="${esc(g.path)}">Importar</button>${stopDel(g)}${
+        g.import_choose ? `<span>Hay ${g.import_choose} descargas de esta película: elige cuál.</span>`
+        : serviceInfo.auto_import ? `<span>o espera: se importa sola.</span>` : ""}</div>`;
+  return pendingRow(g, [arrBadge(g.arr), qbtBadge(g.qbt)], action);
+}
+
+// Lo "bloqueado" (reciente, dudoso...) se borra solo de una en una: fuera de
+// la seleccion en bloque, y la confirmacion avisa del motivo.
+function ghostRow(g) {
+  const action = `<div class="actions">${g.blocked ? "" : `<label><input type="checkbox" class="pick" data-path="${esc(g.path)}" ${selected.has(g.path) ? "checked" : ""}> Seleccionar</label>`}
+       <button class="small danger" data-del="${esc(g.path)}">Borrar</button></div>`;
+  return pendingRow(g, [
+    arrBadge(g.arr),
+    g.status === "parcial" ? badge("partial", `Solo una parte (${g.linked_files} archivos sí están en la biblioteca)`) : "",
+    g.recent ? badge("recent", "Reciente: puede estar pendiente de importar") : "",
+    qbtBadge(g.qbt),
+  ], action);
+}
+
+function pendingRow(g, badges, action) {
+  const files = g.files.length > 1 || g.status === "parcial"
+    ? `<details><summary>${g.files.length} archivo(s) fuera de la biblioteca</summary><ul class="files">${g.files.map((x) => `<li>${esc(x.name)} · ${fmt(x.bytes)}</li>`).join("")}</ul></details>` : "";
+  return `<tr>
+    <td class="name">${titleCell(g.arr?.title, g.arr?.year, g.name)}<div>${badges.join("")}<span class="when">${ago(g.modified)}</span></div>${files}${action}</td>
+    <td class="num"><b>${fmt(g.ghost_bytes)}</b></td></tr>`;
+}
+
+function stalledRow(s) {
+  const what = s.state === "stalledDL" ? `Atascada: sin fuentes (${Math.round((s.progress || 0) * 100)}%)` : "Atascada: no llegan ni los datos del torrent";
+  const action = s.app
+    ? `<div class="actions"><button class="small danger" data-stall="${esc(s.hash)}">Descartar y buscar otra</button></div>`
+    : `<div class="actions"><button class="small danger" data-stall-del="${esc(s.hash)}">Borrar</button><span>Descarga manual</span></div>`;
+  return `<tr>
+    <td class="name">${titleCell(s.title, null, s.name)}<div>${badge("partial", what)}<span class="when">sin actividad ${ago(s.since)}</span></div>${action}</td>
+    <td class="num">${fmt(s.size || 0)}</td></tr>`;
+}
+
+// Extras sin poner en la ficha de su pelicula (spec 036). El boton deja un
+// aviso que recoge la tarea de Windows (hasta un minuto) y lanza
+// scripts\importar-extras.ps1; su resultado vuelve por /api/report.
+const extrasBusy = () => !!(serviceInfo.extras_job?.requested_at || serviceInfo.extras_job?.running_since);
+function extrasJobLine() {
+  const j = serviceInfo.extras_job || {};
+  const now = Date.now() / 1000;
+  if (j.running_since) return `<span>Importando extras en Windows…</span>`;
+  if (j.requested_at) return now - j.requested_at > 180
+    ? `<span class="bad-text">Sigue sin empezar: ¿está activa la tarea de Windows "MediaCenter qBittorrent (panel)"? También puedes ejecutar scripts\\importar-extras.ps1.</span>`
+    : `<span>Esperando a Windows (hasta un minuto)…</span>`;
+  const res = j.result;
+  return res && now - res.at < 600 ? `<span class="${res.ok ? "" : "bad-text"}">${esc(res.message)} (${ago(res.at)})</span>` : "";
+}
+
+function extrasRow(x) {
+  return `<tr>
+    <td class="name">${esc(x.owner)}<div class="sub">${esc(x.download)}</div><div>${badge("recent", `${x.count} extra(s) sin poner en su ficha`)}</div></td>
+    <td class="num">${fmt(x.bytes)}</td></tr>`;
+}
+
+// Visto hace tiempo en Jellyfin (spec 040): mismo borrado que la X de "lo que mas ocupa".
+function watchedRow(w) {
+  const app = w.kind === "movies" ? "radarr" : "sonarr";
+  const what = w.kind === "movies" ? "Vista" : "Serie vista entera";
+  return `<tr>
+    <td class="name">${titleCell(w.arr.title, w.arr.year, w.name)}<div>${badge("ok", `${what} · ${w.users.join(", ")}`)}<span class="when">${
+      w.last_played ? `vista por última vez ${ago(w.last_played)}` : "marcada como vista"}</span></div></td>
+    <td class="num">${fmt(w.bytes)}</td>
+    <td class="xcol"><button class="x" title="Borrar" aria-label="Borrar ${esc(w.name)}" data-lib-app="${app}" data-lib-id="${w.arr.id}"
+      data-lib-name="${esc(w.name)}" data-lib-bytes="${w.bytes}">${TRASH}</button></td></tr>`;
+}
+const TRASH = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+  stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6"/></svg>`;
+
+// Actualizaciones (spec 042): las busca y aplica scripts\actualizaciones.ps1
+// en Windows, como los extras (aviso + tarea de Windows).
+const APP_NAMES = {jellyseerr: "Seerr", homer: "Homer (inicio)", recyclarr: "Recyclarr", jellyfin: "Jellyfin", radarr: "Radarr",
+  sonarr: "Sonarr", prowlarr: "Prowlarr", bazarr: "Bazarr", qbittorrent: "qBittorrent"};
+const appName = (s) => APP_NAMES[s] || s;
+const updatesBusy = () => {
+  const u = serviceInfo.updates || {};
+  return !!(u.apply_requested_at || u.apply_running_since || u.check_requested_at || u.check_running_since);
+};
+function updatesJobLine() {
+  const u = serviceInfo.updates || {};
+  const now = Date.now() / 1000;
+  if (u.apply_running_since) return `<span>Actualizando en Windows (copia de seguridad, descarga y reinicio de cada app)…</span>`;
+  if (u.check_running_since) return `<span>Buscando actualizaciones…</span>`;
+  const req = u.apply_requested_at || u.check_requested_at;
+  if (req) return now - req > 180
+    ? `<span class="bad-text">Sigue sin empezar: ¿está activa la tarea de Windows "MediaCenter qBittorrent (panel)"? También puedes ejecutar scripts\\actualizaciones.ps1.</span>`
+    : `<span>Esperando a Windows (hasta un minuto)…</span>`;
+  const last = u.result?.last_update;
+  return last && now - last.at < 3600 ? `<span class="${last.ok ? "" : "bad-text"}">${esc(last.message)} (${ago(last.at)})</span>` : "";
+}
+// Al final de "Detalles" (no en Pendiente: no es algo de las descargas).
+function updatesSection() {
+  const u = serviceInfo.updates;
+  if (!u) return "";
+  const list = u.result?.updates || [];
+  const when = u.result?.checked_at ? `Mirado ${ago(u.result.checked_at)}: ${list.length
+    ? `versión nueva de ${list.length === 1 ? "una app" : `${list.length} apps`}` : "todo al día"}.` : "Aún no se ha mirado.";
+  return `<h3 id="actualizaciones">Versión de las apps${info(`Se mira una vez al día si hay una versión más nueva de cada app.
+      <b>Actualizar</b> hace una copia de seguridad de la configuración, descarga la versión nueva y reinicia esa app.
+      Nunca se actualiza sola.`)}</h3>
+    ${list.length ? `<div>${list.map((x) => badge("recent", appName(x.service))).join("")}</div>` : ""}
+    <div class="actions">${list.length ? `<button class="small" id="updates-apply" ${updatesBusy() ? "disabled" : ""}>Actualizar</button>` : ""}
+      <button class="small link" id="updates-check" ${updatesBusy() ? "disabled" : ""}>Buscar ahora</button>
+      <span>${when} ${updatesJobLine()}</span></div>
+    ${(u.result?.errors || []).map((e) => `<div class="sub">${esc(e)}</div>`).join("")}`;
+}
+
+// Actualizar MediaCenter mismo (spec 051): lo hace scripts\actualizar-mediacenter.ps1
+// en Windows (aviso + tarea), como las apps.
+const appBusy = () => !!(serviceInfo.app?.requested_at || serviceInfo.app?.running_since);
+function appSection() {
+  const a = serviceInfo.app;
+  if (!a || !a.version) return "";
+  const latest = a.latest?.latest;
+  const now = Date.now() / 1000;
+  let job = "";
+  if (a.running_since) job = `<span>Actualizando MediaCenter en Windows (copia de seguridad, descarga, comprobación)… tarda unos minutos.</span>`;
+  else if (a.requested_at) job = now - a.requested_at > 180
+    ? `<span class="bad-text">Sigue sin empezar: ¿está activa la tarea de Windows "MediaCenter qBittorrent (panel)"?</span>`
+    : `<span>Esperando a Windows (hasta un minuto)…</span>`;
+  else if (a.result?.last_update && now - a.result.last_update.at < 86400)
+    job = `<span class="${a.result.last_update.ok ? "" : "bad-text"}">${esc(a.result.last_update.message)} (${ago(a.result.last_update.at)})</span>`;
+  const when = a.latest?.checked_at ? `Mirado ${ago(a.latest.checked_at)}.` : "Aún no se ha mirado.";
+  return `<h3 id="mediacenter">Versión de MediaCenter${info(`Lo nuestro: la configuración automática, este panel, los scripts.
+      Se mira una vez al día si hay una versión nueva. <b>Actualizar</b> hace una copia de seguridad, la descarga,
+      la aplica y comprueba que todo sigue bien; si algo falla, vuelve a la versión de antes. Nunca se actualiza sola.`)}</h3>
+    <div>Instalada: <b>${esc(a.version)}</b>${a.available ? ` · disponible: ${badge("recent", latest)}` : latest ? " · al día" : ""}</div>
+    ${a.available && a.latest?.notes ? `<details class="sub"><summary>Novedades de ${esc(latest)}</summary><pre style="white-space:pre-wrap">${esc(a.latest.notes)}</pre></details>` : ""}
+    <div class="actions">${a.available ? `<button class="small" id="app-apply" ${appBusy() ? "disabled" : ""}>Actualizar MediaCenter</button>` : ""}
+      <button class="small link" id="app-check" ${appBusy() ? "disabled" : ""}>Buscar ahora</button>
+      <span>${when} ${job}</span></div>`;
+}
+function askAppUpdate() {
+  const a = serviceInfo.app;
+  openConfirm(`<p>Se va a actualizar MediaCenter de <b>${esc(a.version)}</b> a <b>${esc(a.latest.latest)}</b>.</p>
+    <ul class="files">
+      <li>Primero se hace una copia de seguridad de la configuración y del programa.</li>
+      <li>Las apps se reinician un momento (<b>Jellyfin corta lo que se esté viendo</b>).</li>
+      <li>Después se comprueba que todo sigue bien; si algo falla, vuelve sola a la versión de antes.</li>
+      <li>Lo hace Windows en segundo plano: tarda unos minutos.</li>
+    </ul>`, () => requestApp("apply"));
+}
+async function requestApp(kind) {
+  try {
+    const r = await (await fetch(kind === "apply" ? "api/app-update" : "api/app-update/check",
+      {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"})).json();
+    if (!r.ok) $("#notice").innerHTML = `<div class="banner bad">${esc(r.error || "No se ha podido.")}</div>`;
+  } catch (e) {
+    $("#notice").innerHTML = noService;
+  }
+  clearTimeout(timer);
+  timer = setTimeout(load, 300);
+}
+
+// Comprobacion de la instalacion (spec 049): lo hace el propio servidor
+// (verify.py), al arrancar, cada dia y con el boton. Solo lee.
+const verifyBusy = () => !!serviceInfo.verify?.running;
+function verifyLine() {
+  const v = serviceInfo.verify || {};
+  const s = v.result?.summary;
+  const when = v.result ? `Comprobado ${ago(v.result.checked_at)}: ${s.fallo ? `${s.fallo} problema${s.fallo === 1 ? "" : "s"}`
+    : s.aviso ? `${s.aviso} aviso${s.aviso === 1 ? "" : "s"}` : `todo bien (${s.ok} comprobaciones)`}.` : "Aún no se ha comprobado.";
+  return `<div class="actions"><button class="small link" id="verify-run" ${verifyBusy() ? "disabled" : ""}>Comprobar ahora</button>
+    <span>${verifyBusy() ? "Comprobando (tarda unos segundos)…" : when}</span></div>`;
+}
+const VERIFY_INFO = info(`Mira en cada app que la configuración automática se ha aplicado de verdad: que Bazarr tiene
+  perfiles de idioma, que Jellyfin acepta la clave y ve lo descargado, que Radarr y Sonarr tienen buscadores y cliente
+  de descargas, etc. Solo mira: no cambia nada. Se hace al arrancar y una vez al día.`);
+// Tarjeta arriba solo si hay algo que no esta bien; si no, una linea en Detalles.
+function verifyCard() {
+  const res = serviceInfo.verify?.result;
+  if (!res || !(res.summary.fallo || res.summary.aviso)) return "";
+  const bad = res.checks.filter((c) => c.level !== "ok").sort((a, b) => (a.level === "fallo" ? 0 : 1) - (b.level === "fallo" ? 0 : 1));
+  return `<section class="card" id="comprobacion">
+    <div class="card-head"><h2>Comprobación de la instalación${VERIFY_INFO}</h2></div>
+    <table>${bad.map((c) => `<tr><td class="name">${badge(c.level === "fallo" ? "ghost" : "partial", c.level === "fallo" ? "Problema" : "Aviso")}
+      <b>${esc(c.app)}</b>: ${esc(c.name)}${c.detail ? `<div class="sub">${esc(c.detail)}</div>` : ""}
+      ${c.fix ? `<div class="sub">Qué hacer: ${esc(c.fix)}</div>` : ""}</td></tr>`).join("")}</table>
+    ${verifyLine()}</section>`;
+}
+function verifySection() {
+  const res = serviceInfo.verify?.result;
+  if (res && (res.summary.fallo || res.summary.aviso)) return "";
+  return `<h3 id="comprobacion-ok">Comprobación de la instalación${VERIFY_INFO}</h3>${verifyLine()}`;
+}
+async function requestVerify() {
+  try {
+    const r = await (await fetch("api/verify", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"})).json();
+    if (!r.ok) $("#notice").innerHTML = `<div class="banner bad">${esc(r.error || "No se ha podido comprobar.")}</div>`;
+  } catch (e) {
+    $("#notice").innerHTML = noService;
+  }
+  clearTimeout(timer);
+  timer = setTimeout(load, 300);
+}
+
+// Listas de Pendiente: 5 filas y el resto plegado.
+const FOLD = 5;
+function folded(id, rows) {
+  if (rows.length <= FOLD) return `<table>${rows.join("")}</table>`;
+  const open = view.showAll.has(id);
+  return `<table>${(open ? rows : rows.slice(0, FOLD)).join("")}</table>${open
+    ? `<button class="link small" data-show-less="${id}">Ver menos</button>`
+    : `<button class="link small" data-show-all="${id}">Ver las ${rows.length}</button>`}`;
+}
+
+function askUpdate() {
+  const list = serviceInfo.updates?.result?.updates || [];
+  openConfirm(`<p>Se van a actualizar: <b>${list.map((x) => esc(appName(x.service))).join(", ")}</b>.</p>
+    <ul class="files">
+      <li>Primero se hace una copia de seguridad de la configuración.</li>
+      <li>Después se descarga cada versión nueva y se reinicia esa app: estará un minuto sin funcionar
+        ${list.some((x) => x.service === "jellyfin") ? "(<b>Jellyfin corta lo que se esté viendo</b>)" : ""}.</li>
+      <li>Lo hace Windows en segundo plano: tarda unos minutos en empezar y en terminar.</li>
+    </ul>`, () => requestUpdates("apply"));
+}
+
+async function requestUpdates(kind) {
+  try {
+    const r = await (await fetch(`api/updates/${kind}`, {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"})).json();
+    if (!r.ok) $("#notice").innerHTML = `<div class="banner bad">${esc(r.error)}</div>`;
+  } catch (e) {
+    $("#notice").innerHTML = noService;
+  }
+  clearTimeout(timer);
+  timer = setTimeout(load, 300);
+}
+
+// Subtitulos que Bazarr cree tener y no estan (spec 043).
+const LANGS = {en: "inglés", es: "español", fr: "francés", de: "alemán", it: "italiano", pt: "portugués", ja: "japonés"};
+const langList = (ls) => ls.map((l) => LANGS[l] || l).join(", ");
+const ep = (e) => `T${e.season}E${String(e.episode).padStart(2, "0")}`;
+function subtitlesJobLine() {
+  const j = serviceInfo.subtitles_job || {};
+  if (j.running) return `<span>Buscando en Bazarr: ${j.done} de ${j.total}…</span>`;
+  return j.message && Date.now() / 1000 - j.at < 3600 ? `<span>${esc(j.message)} (${ago(j.at)})</span>` : "";
+}
+function subtitleRow(x) {
+  const what = x.kind === "tv"
+    ? `${x.episodes.length} episodio(s): Bazarr cree que tienen subtítulos en ${langList(x.langs)} que no están`
+    : `Bazarr cree que tiene subtítulos en ${langList(x.langs)} que no están`;
+  const eps = x.kind === "tv" ? `<details><summary>Episodios</summary><ul class="files">${
+    x.episodes.map((e) => `<li>${ep(e)} · ${esc(langList(e.langs))}</li>`).join("")}</ul></details>` : "";
+  return `<tr>
+    <td class="name">${titleCell(x.title, x.year, "")}<div>${badge("partial", what)}</div>${eps}
+      <div class="actions"><button class="small" data-subs-kind="${x.kind}" data-subs-id="${x.id}" ${serviceInfo.subtitles_job?.running ? "disabled" : ""}>Buscar subtítulos</button></div></td>
+    <td class="num"></td></tr>`;
+}
+
+async function searchSubtitles(kind, id) {
+  try {
+    const r = await (await fetch("api/subtitles/search", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({items: [{kind, id}]})})).json();
+    if (!r.ok) $("#notice").innerHTML = `<div class="banner bad">${esc(r.error)}</div>`;
+  } catch (e) {
+    $("#notice").innerHTML = noService;
+  }
+  clearTimeout(timer);
+  timer = setTimeout(load, 300);
+}
+
+function pendingCard(r) {
+  const isMissing = (g) => g.arr && g.arr.verdict === "missing";
+  // Si lo que sobra de una descarga son sus extras, ya sale como fila de extras.
+  const ghosts = r.ghosts.filter((g) => !g.extras_pending);
+  const missing = ghosts.filter(isMissing);
+  const rest = ghosts.filter((g) => !isMissing(g));
+  const stuck = stalled.stalled || [];
+  const canStall = stuck.filter((s) => s.app);
+  const extras = r.extras || [];
+  const watched = r.watched || [];
+  const subs = r.subtitles || [];
+  const subsJob = subtitlesJobLine();
+  // Dos pestanas: lo de las descargas y "Ya visto" (spec 040), que es otra cosa.
+  const rows = [...missing.map(importRow), ...extras.map(extrasRow), ...stuck.map(stalledRow), ...rest.map(ghostRow),
+                ...subs.map(subtitleRow)];
+  const n = rows.length;
+  const onWatched = view.pending === "watched";
+  const tabs = [["todo", `Descargas · ${n}`], ["watched", `Ya visto · ${watched.length}`]].map(([k, l]) =>
+    `<button class="${(k === "watched") === onWatched ? "on" : ""}" data-pending="${k}">${l}</button>`).join("");
+  const watchedBytes = watched.reduce((a, w) => a + w.bytes, 0);
+  const job = extrasJobLine();
+  const tools = [
+    extras.length || job ? `${extras.length ? `<button class="small" id="extras-import" ${extrasBusy() ? "disabled" : ""}>${extrasBusy()
+      ? "Importando extras…" : `Importar extras (${extras.reduce((a, x) => a + x.count, 0)})`}</button>` : ""}${job}` : "",
+    subsJob,
+    canStall.length > 1 ? `<button class="small danger" id="stall-all">Descartar las ${canStall.length} atascadas</button>` : "",
+    rest.some((g) => !g.blocked) ? `<button class="small link" id="pick-all">Seleccionar todo lo borrable</button>
+      <button class="small danger" id="bulk-del" disabled>Borrar seleccionadas</button>` : "",
+  ].join("");
+  return `<section class="card">
+    <div class="card-head"><h2>Pendiente${info(`Lo que necesita que hagas algo:
+      <br>• <b>Fuera de Jellyfin</b>: descargado pero no está en la biblioteca, y Radarr/Sonarr lo siguen esperando. No hace falta
+      volver a descargarlo: <b>Importar</b>${serviceInfo.auto_import ? ` (lo que no admite duda se importa solo ${String(serviceInfo.auto_import_after_hours).replace(".", ",")} h después de terminar)` : ""}.
+      Lo que no se puede identificar, en Radarr/Sonarr → Importación manual. Si no la quieres, <b>Borrar y dejar de buscarla</b>: no se vuelve a descargar.
+      <br>• <b>Atascada</b>: lleva más de ${String(stalled.hours ?? "").replace(".", ",")} h sin avanzar (sin fuentes). Descartarla la manda a la lista negra y Radarr/Sonarr buscan otra versión.
+      <br>• <b>El resto</b>: descargas que ocupan disco pero no forman parte de la biblioteca (casi siempre versiones sustituidas por otra mejor, o películas quitadas de Radarr). Se pueden borrar sin que Jellyfin pierda nada.
+      Lo reciente o dudoso también, pero de una en una y con aviso.
+      <br>• <b>Extras</b>: making of, escenas eliminadas… que trae la descarga y Radarr/Sonarr no ponen. <b>Importar extras</b> los pone
+      en la ficha de su película o serie, sin ocupar más espacio (tarda hasta un minuto en empezar).
+      <br>• <b>Ya visto</b>: películas, y series vistas enteras, que alguien vio en Jellyfin hace más de
+      ${String(r.watched_days ?? 30).replace(".", ",")} días, en su propia pestaña. Lo que es favorito de alguien no sale. La <b>papelera</b> es lo mismo que la ✕ de
+      "Lo que más ocupa": se borra del todo y no se puede recuperar.
+      <br>• <b>Subtítulos que no están</b>: Bazarr cree que hay subtítulos (p. ej. dentro del vídeo) que ya no existen,
+      normalmente porque el archivo se cambió por otra versión. Mientras lo crea, no busca otros. <b>Buscar subtítulos</b> los pide
+      igualmente (gasta cuota de OpenSubtitles).`)}</h2><div class="seg">${tabs}</div></div>
+    ${onWatched
+      ? `${watched.length ? `<div class="sub">${watched.length} · ${fmt(watchedBytes)} que se liberarían</div>
+          ${folded("watched", watched.map(watchedRow))}`
+          : `<div class="empty">Nada visto hace más de ${String(r.watched_days ?? 30).replace(".", ",")} días.</div>`}`
+      : `${n ? `<div class="sub">${n} · ${fmt(r.ghost_total)} fuera de la biblioteca</div>` : ""}
+    ${stalled.error ? `<div class="sub">No se han podido consultar las atascadas: ${esc(stalled.error)}</div>` : ""}
+    ${tools ? `<div class="toolbar">${tools}</div>` : ""}
+    ${n ? folded("pending", rows)
+        : `<div class="empty">Todo en orden: nada fuera de la biblioteca ni atascado.</div>`}`}
+  </section>`;
+}
+
+// --- Acciones ------------------------------------------------------------
+async function postAction(url, body, busy) {
+  $("#notice").innerHTML = `<div class="banner info">${esc(busy)}</div>`;
+  try {
+    const res = await fetch(url, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+    return (await res.json()).results || [];
+  } catch (e) {
+    return null;
+  } finally {
+    clearTimeout(timer);
+    timer = setTimeout(load, 1500);
+  }
+}
+const noService = `<div class="banner bad">No se ha podido contactar con el servicio; vuelve a cargar la página.</div>`;
+
+async function doImport(path) {
+  const g = ghostsByPath[path];
+  if (!confirm(`¿Importar "${g?.name || path}" en la biblioteca?\n\nSe enlaza (hardlink): no ocupa espacio extra y el torrent sigue compartiéndose.`)) return;
+  const res = await postAction("api/import", {paths: [path]}, `Importando ${g?.name || path}… (puede tardar un minuto)`);
+  if (!res) { $("#notice").innerHTML = noService; return; }
+  const r = res[0] || {};
+  $("#notice").innerHTML = r.ok
+    ? `<div class="banner info">Importada: ${esc(g?.name || path)}. ${esc(r.message || "")}</div>`
+    : `<div class="banner bad">No se ha importado: ${esc(r.error || "error desconocido")}</div>`;
+}
+
+function updateBulk() {
+  const btn = $("#bulk-del");
+  if (!btn) return;
+  const bytes = [...selected].reduce((a, p) => a + (ghostsByPath[p]?.ghost_bytes || 0), 0);
+  btn.disabled = selected.size === 0;
+  btn.textContent = selected.size ? `Borrar seleccionadas (${selected.size} · ${fmt(bytes)})` : "Borrar seleccionadas";
+}
+
+function warningsFor(g) {
+  const w = [];
+  if (g.arr?.verdict === "missing") w.push(g.arr.app === "radarr"
+    ? "Radarr la sigue esperando: dejará de buscarla (no se volverá a descargar; se puede reactivar en Radarr)."
+    : "Sonarr sigue esperando estos episodios: dejará de buscarlos (no se volverán a descargar; se pueden reactivar en Sonarr).");
+  if (g.recent) w.push("Es reciente: puede que Radarr/Sonarr estén a punto de importarla.");
+  if (g.arr?.verdict === "doubtful") w.push(`${g.arr.doubtful.length} vídeo(s) que Sonarr no reconoce como episodio: puede que sí los quieras.`);
+  if (g.arr?.verdict === "error") w.push("Radarr/Sonarr no responden: no se sabe si hace falta.");
+  if (!g.arr) w.push("Radarr/Sonarr no la conocen: es una descarga manual. Asegúrate de que no la quieres.");
+  if (g.status === "parcial") w.push(`Solo se borran ${g.files.length} archivo(s); lo que está en la biblioteca no se toca.`);
+  if (g.qbt) w.push(/^(uploading|stalledUP|forcedUP)$/.test(g.qbt.state || "")
+    ? "Se quitará de qBittorrent, que ahora mismo la está compartiendo."
+    : "Se quitará también de la lista de qBittorrent.");
+  return w;
+}
+
+let modalOpen = false;
+function openConfirm(html, onOk) {
+  const d = $("#confirm");
+  $("#confirm-body").innerHTML = html;
+  modalOpen = true;
+  d.showModal();
+  $("#confirm-ok").onclick = async () => { d.close(); modalOpen = false; await onOk(); };
+  $("#confirm-cancel").onclick = () => { d.close(); modalOpen = false; };
+}
+
+function askDelete(paths) {
+  const items = paths.map((p) => ghostsByPath[p]).filter(Boolean);
+  if (!items.length) return;
+  const total = items.reduce((a, g) => a + g.ghost_bytes, 0);
+  const list = items.map((g) => {
+    const w = warningsFor(g);
+    return `<li><b>${esc(g.name)}</b> · ${fmt(g.ghost_bytes)}${w.length ? `<ul class="warn">${w.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}</li>`;
+  }).join("");
+  openConfirm(`<p>Se van a borrar <b>${items.length} descarga(s)</b> y se liberarán unos <b>${fmt(total)}</b>.
+    No se puede deshacer, pero nada de esto está en la biblioteca: Jellyfin no pierde nada.</p><ul class="files">${list}</ul>`,
+    // Con avisos de riesgo ya confirmados, el servidor no aplica los bloqueos.
+    () => doDelete(items.map((g) => g.path), items.some((g) => g.blocked)));
+}
+
+async function doDelete(paths, allowRisky = false) {
+  const results = await postAction("api/delete", {paths, allow_risky: allowRisky}, `Borrando ${paths.length} descarga(s)…`);
+  if (!results) {
+    $("#notice").innerHTML = `<div class="banner bad">No se ha podido contactar con el servicio; no se sabe si se ha borrado algo. Vuelve a cargar la página.</div>`;
+    return;
+  }
+  paths.forEach((p) => selected.delete(p));
+  const ok = results.filter((r) => r.ok);
+  const bad = results.filter((r) => !r.ok);
+  const freed = ok.reduce((a, r) => a + (r.bytes || 0), 0);
+  $("#notice").innerHTML = `<div class="banner ${bad.length ? "bad" : "info"}">
+    ${ok.length ? `Borradas ${ok.length} descarga(s): ${fmt(freed)} liberados. ${ok.map((r) => esc(r.unmonitored || "")).join(" ")}` : "No se ha borrado nada."}
+    ${bad.length ? `<ul class="files">${bad.map((r) => `<li>${esc(ghostsByPath[r.path]?.name || r.path)}: ${esc(r.error)}</li>`).join("")}</ul>` : ""}
+    </div>`;
+}
+
+function askLibraryDelete(app, id, name, bytes) {
+  const what = app === "radarr" ? "la película" : "la serie entera";
+  openConfirm(`<p>Se va a borrar ${what} <b>${esc(name)}</b> (${fmt(bytes)}) <b>definitivamente</b>:</p>
+    <ul class="files">
+      <li>${app === "radarr" ? "Radarr" : "Sonarr"} la quita de su lista: no se volverá a descargar salvo que la vuelvas a pedir.</li>
+      <li>Sus archivos se borran del disco, junto con su descarga (qBittorrent y torrents/). <b>No hay papelera: no se puede recuperar.</b></li>
+      <li>Desaparece de Jellyfin y de Seerr (desde Seerr se podrá volver a pedir).</li>
+    </ul>`,
+    async () => {
+      const res = await postAction("api/library-delete", {items: [{app, id}]}, `Quitando ${name} de la biblioteca…`);
+      if (!res) { $("#notice").innerHTML = noService; return; }
+      const r = res[0] || {};
+      $("#notice").innerHTML = r.ok
+        ? `<div class="banner info">Borrada: ${esc(r.title)}. Liberado: ${fmt(r.library_bytes + r.downloads_bytes)} (biblioteca ${fmt(r.library_bytes)}, descargas ${fmt(r.downloads_bytes)}). ${esc(r.elsewhere || "")}
+           ${r.skipped?.length ? `<ul class="files">${r.skipped.map((s) => `<li>No se ha borrado: ${esc(s)}</li>`).join("")}</ul>` : ""}</div>`
+        : `<div class="banner bad">No se ha quitado: ${esc(r.error)}</div>`;
+    });
+}
+
+function askStalled(hashes) {
+  const items = hashes.map((h) => stalledByHash[h]).filter((s) => s && s.app);
+  if (!items.length) return;
+  openConfirm(`<p>Se van a descartar <b>${items.length} descarga(s) atascada(s)</b>:</p>
+    <ul class="files">${items.map((s) => `<li><b>${esc(s.title || s.name)}</b> · ${esc(s.name)}</li>`).join("")}</ul>
+    <p>Se quitan de qBittorrent con lo descargado hasta ahora, van a la lista negra de Radarr/Sonarr
+    (no la volverán a elegir) y buscan otra versión ellos solos.</p>`,
+    async () => {
+      const results = await postAction("api/stalled/remove", {hashes: items.map((s) => s.hash)}, `Descartando ${items.length} descarga(s)…`);
+      if (!results) { $("#notice").innerHTML = noService; return; }
+      const ok = results.filter((r) => r.ok), bad = results.filter((r) => !r.ok);
+      $("#notice").innerHTML = `<div class="banner ${bad.length ? "bad" : "info"}">
+        ${ok.length ? `Descartadas ${ok.length}: Radarr/Sonarr ya están buscando otra versión.` : "No se ha descartado nada."}
+        ${bad.length ? `<ul class="files">${bad.map((r) => `<li>${esc(r.name || r.hash)}: ${esc(r.error)}</li>`).join("")}</ul>` : ""}</div>`;
+    });
+}
+
+// Atascada que Radarr/Sonarr no conocen (spec 033): solo se quita de qBittorrent.
+function askStalledDelete(hash) {
+  const s = stalledByHash[hash];
+  if (!s) return;
+  openConfirm(`<p>Se va a borrar la descarga atascada <b>${esc(s.name)}</b>: se quita de qBittorrent con lo descargado hasta ahora.</p>
+    <ul class="warn"><li>Radarr/Sonarr no la conocen: es una descarga manual. Asegúrate de que no la quieres.</li></ul>`,
+    async () => {
+      const results = await postAction("api/stalled/remove", {hashes: [hash], mode: "delete"}, `Borrando ${s.name}…`);
+      if (!results) { $("#notice").innerHTML = noService; return; }
+      const r = results[0] || {};
+      $("#notice").innerHTML = r.ok
+        ? `<div class="banner info">Borrada: ${esc(s.name)}.</div>`
+        : `<div class="banner bad">No se ha borrado: ${esc(r.error || "error desconocido")}</div>`;
+    });
+}
+
+async function importExtras() {
+  try {
+    const r = await (await fetch("api/extras/import", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"})).json();
+    if (!r.ok) $("#notice").innerHTML = `<div class="banner bad">${esc(r.error)}</div>`;
+  } catch (e) {
+    $("#notice").innerHTML = noService;
+  }
+  clearTimeout(timer);
+  timer = setTimeout(load, 300);
+}
+
+// Parar/continuar descargas (spec 028) y abrir qBittorrent nativo (spec 030).
+function downloadsRow(dl) {
+  if (!dl) return "";
+  if (dl.opening) return `<div class="actions"><button class="small" disabled>Abriendo…</button>
+      <span>Abriendo qBittorrent en Windows (hasta un minuto)…</span></div>`;
+  if (dl.closed) return `<div class="actions"><button class="small" id="dl-toggle" data-action="start">Abrir qBittorrent</button>
+      <span>qBittorrent está cerrado: no se descarga nada.</span></div>`;
+  const text = dl.paused
+    ? (dl.reason === "auto" ? `Parado por poco espacio; se reanuda solo por encima de ${fmt(dl.resume_at)} libres.` : "Descargas paradas a mano.")
+    : `Se para solo si quedan menos de ${fmt(dl.min_free)} libres.`;
+  return `<div class="actions"><button class="small${dl.paused ? "" : " danger"}" id="dl-toggle" data-action="${dl.paused ? "start" : "stop"}">
+      ${dl.paused ? "Reanudar descargas" : "Parar descargas"}</button><span>${esc(text)}</span></div>
+    ${dl.error ? `<div class="sub">qBittorrent no responde: ${esc(dl.error)}</div>` : ""}`;
+}
+
+async function toggleDownloads(action) {
+  $("#notice").innerHTML = `<div class="banner info">${action === "stop" ? "Parando" : "Reanudando"} qBittorrent…</div>`;
+  try {
+    const res = await fetch(`api/downloads/${action}`, {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"});
+    const r = await res.json();
+    $("#notice").innerHTML = r.ok
+      ? `<div class="banner info">${r.message ? esc(r.message) : `${action === "stop" ? "Parados" : "Reanudados"} ${r.count} torrent(s) en qBittorrent.`}</div>`
+      : `<div class="banner bad">${esc(r.error)}</div>`;
+  } catch (e) {
+    $("#notice").innerHTML = `<div class="banner bad">No se ha podido contactar con el servicio.</div>`;
+  }
+  clearTimeout(timer);
+  timer = setTimeout(load, 500);
+}
+
+document.addEventListener("change", (e) => {
+  if (!e.target.classList.contains("pick")) return;
+  const p = e.target.dataset.path;
+  e.target.checked ? selected.add(p) : selected.delete(p);
+  updateBulk();
+});
+// Recordar que "Detalles" (y demas desplegables con id) estan abiertos entre refrescos.
+document.addEventListener("toggle", (e) => {
+  if (e.target.id) e.target.open ? view.open.add(e.target.id) : view.open.delete(e.target.id);
+}, true);
+document.addEventListener("click", (e) => {
+  if (e.target.closest(".info")) { e.preventDefault(); return; }
+  const lib = e.target.closest("[data-lib-id]");
+  if (lib) askLibraryDelete(lib.dataset.libApp, Number(lib.dataset.libId), lib.dataset.libName, Number(lib.dataset.libBytes));
+  const imp = e.target.closest("[data-imp]");
+  if (imp) doImport(imp.dataset.imp);
+  const del = e.target.closest("[data-del]");
+  if (del) askDelete([del.dataset.del]);
+  if (e.target.id === "bulk-del") askDelete([...selected]);
+  const dl = e.target.closest("#dl-toggle");
+  if (dl) toggleDownloads(dl.dataset.action);
+  const st = e.target.closest("[data-stall]");
+  if (st) askStalled([st.dataset.stall]);
+  const sd = e.target.closest("[data-stall-del]");
+  if (sd) askStalledDelete(sd.dataset.stallDel);
+  if (e.target.id === "stall-all") askStalled(Object.keys(stalledByHash));
+  if (e.target.id === "extras-import") importExtras();
+  if (e.target.id === "updates-apply") askUpdate();
+  if (e.target.id === "updates-check") requestUpdates("check");
+  if (e.target.id === "verify-run") requestVerify();
+  if (e.target.id === "app-apply") askAppUpdate();
+  if (e.target.id === "app-check") requestApp("check");
+  const sb = e.target.closest("[data-subs-id]");
+  if (sb) searchSubtitles(sb.dataset.subsKind, Number(sb.dataset.subsId));
+  const tab = e.target.closest("[data-top]");
+  if (tab) { view.top = tab.dataset.top; rerender(); }
+  const ptab = e.target.closest("[data-pending]");
+  if (ptab) { view.pending = ptab.dataset.pending; rerender(); }
+  const all = e.target.closest("[data-show-all]");
+  if (all) { view.showAll.add(all.dataset.showAll); rerender(); }
+  const less = e.target.closest("[data-show-less]");
+  if (less) { view.showAll.delete(less.dataset.showLess); rerender(); }
+  if (e.target.id === "pick-all") {
+    const all = Object.values(ghostsByPath).filter((g) => !g.blocked && !(g.arr && g.arr.verdict === "missing"));
+    const every = all.every((g) => selected.has(g.path));
+    all.forEach((g) => every ? selected.delete(g.path) : selected.add(g.path));
+    document.querySelectorAll(".pick").forEach((c) => { c.checked = selected.has(c.dataset.path); });
+    updateBulk();
+  }
+});
+
+async function loadStalled() {
+  try {
+    stalled = await (await fetch("api/stalled", {cache: "no-store"})).json();
+  } catch (e) {
+    stalled = {stalled: [], error: "no se puede contactar con el servicio"};
+  }
+  stalledByHash = Object.fromEntries((stalled.stalled || []).map((s) => [s.hash, s]));
+}
+
+// --- Lo que mas ocupa y detalles -----------------------------------------
+function sizeRows(id, rows, n = 10) {
+  if (!rows.length) return `<div class="empty">Vacío</div>`;
+  const max = Math.max(...rows.map((x) => x.bytes), 1);
+  const shown = view.showAll.has(id) ? rows : rows.slice(0, n);
+  const body = shown.map((r) => `<tr>
+      <td class="name">${esc(r.label || r.name)}${r.note ? `<div class="sub">${esc(r.note)}</div>` : ""}<div class="bar"><span style="width:${(r.bytes / max * 100).toFixed(1)}%"></span></div></td>
+      <td class="num">${fmt(r.bytes)}</td>
+      ${r.arr ? `<td class="xcol"><button class="x" title="Quitar de la biblioteca" aria-label="Quitar ${esc(r.name)} de la biblioteca"
+        data-lib-app="${id === "movies" ? "radarr" : "sonarr"}" data-lib-id="${r.arr.id}" data-lib-name="${esc(r.name)}" data-lib-bytes="${r.bytes}">✕</button></td>`
+        : (id === "movies" || id === "tv" ? `<td class="xcol"></td>` : "")}
+    </tr>`).join("");
+  const more = shown.length < rows.length ? `<button class="link small" data-show-all="${id}">Ver las ${rows.length}</button>` : "";
+  return `<table>${body}</table>${more}`;
+}
+
+function topCard(r) {
+  const tabs = [["movies", "Películas"], ["tv", "Series"]].map(([k, l]) =>
+    `<button class="${view.top === k ? "on" : ""}" data-top="${k}">${l} · ${r.top[k].length}</button>`).join("");
+  return `<section class="card">
+    <div class="card-head"><h2>Lo que más ocupa${info(`Las películas y series de la biblioteca, de mayor a menor.
+      La <b>✕</b> la borra del todo: Radarr/Sonarr la quitan de su lista, se borran sus archivos y su descarga,
+      y desaparece de Jellyfin y Seerr. No hay papelera.`)}</h2><div class="seg">${tabs}</div></div>
+    ${sizeRows(view.top, r.top[view.top])}
+  </section>`;
+}
+
+function detailsCard(r) {
+  const cfg = r.top.config;
+  const imports = (serviceInfo.imports || []).slice(0, 8);
+  const left = r.leftovers.map((x) => `<tr>
+      <td class="name">${esc(x.name)}<div>${x.orphan ? badge("ghost", "qBittorrent ya no lo descarga: son restos") : qbtBadge(x.qbt)}</div></td>
+      <td class="num">${fmt(x.bytes)}</td></tr>`).join("");
+  return `<section class="card"><details class="more" id="more" ${view.open.has("more") ? "open" : ""}><summary>Detalles</summary>
+    <h3>Carpetas</h3>${sizeRows("folders", r.folders, 99)}
+    ${left ? `<h3>Descargas a medias${info("Lo que hay en la carpeta <code>incomplete</code>: descargas que qBittorrent aún no ha terminado. Si qBittorrent ya no lo descarga, son restos que se pueden borrar a mano.")}</h3><table>${left}</table>` : ""}
+    ${imports.length ? `<h3>Importaciones recientes</h3><table>${imports.map((x) => `<tr>
+      <td class="name">${titleCell(x.title, null, x.name)}<div>${x.ok ? badge("ok", x.auto ? "Importada sola" : "Importada con el botón")
+        : badge("partial", `No se pudo importar: ${x.message}`)}</div></td>
+      <td class="num">${ago(x.at)}</td></tr>`).join("")}</table>` : ""}
+    <h3>Configuración por app${r.config_measured ? ` <span class="sub">(medida ${ago(r.config_measured)})</span>` : ""}</h3>
+    ${sizeRows("config", cfg)}
+    ${updatesSection()}
+    ${appSection()}
+    ${verifySection()}
+  </details></section>`;
+}
+
+// --- Pagina --------------------------------------------------------------
+function diskCard(r) {
+  const d = r.disk;
+  const f = Object.fromEntries(r.folders.map((x) => [x.key, x]));
+  const segs = [
+    ["Biblioteca", (f.movies?.bytes || 0) + (f.tv?.bytes || 0), "var(--accent)"],
+    ["Fuera de la biblioteca", r.ghost_total, "var(--pink)"],
+    ["Descargas a medias", f.incomplete?.bytes || 0, "var(--warn)"],
+    ["Configuración", d.config || 0, "var(--seg-config)"],
+    ["Otros", d.other, "var(--seg-other)"],
+  ].filter((s) => s[1] > 0);
+  const stack = segs.map(([l, b, c]) => `<span title="${l}: ${fmt(b)}" style="width:${(b / d.total * 100).toFixed(2)}%;background:${c}"></span>`).join("");
+  const legend = segs.map(([l, b, c]) => `<span><i style="background:${c}"></i>${l} ${fmt(b)}</span>`).join("");
+  return `<section class="card">
+    <div class="free"><b>${fmt(d.free)}</b> libres de ${fmt(d.total)} <span class="sub">(${pct(d.free / d.total * 100)}%)</span>${info(`<b>Biblioteca</b>: lo que ve Jellyfin.
+      <b>Fuera de la biblioteca</b>: descargas que ocupan sitio y Jellyfin no ve (ver Pendiente).
+      <b>Descargas a medias</b>: lo que qBittorrent aún está bajando.
+      <b>Otros</b>: lo que hay en el disco que no es del MediaCenter.
+      <br>Las descargas terminadas que sí están en la biblioteca no cuentan dos veces: comparten el archivo (hardlink).
+      <br>Con el disco lleno Jellyfin da "medio no compatible", por eso las descargas se paran solas por debajo del mínimo.`)}</div>
+    <div class="stack">${stack}</div>
+    <div class="legend">${legend}</div>
+    ${downloadsRow(serviceInfo.downloads)}
+  </section>`;
+}
+
+let lastReport = null;
+function render(r) {
+  lastReport = r;
+  const freePct = r.disk.free / r.disk.total * 100;
+  $("#banner").innerHTML = (freePct < r.warn_percent
+    ? `<div class="banner bad">Quedan solo ${fmt(r.disk.free)} libres (${pct(freePct)}%). Con el disco lleno, Jellyfin no puede preparar el vídeo para la tele y lo muestra como "medio no compatible", y las descargas se paran.</div>`
+    : "")
+    // Bloqueos de LaLiga (spec 050): mientras dure el partido.
+    + (serviceInfo.football?.active ? `<div class="banner bad">${esc(serviceInfo.football.message)}</div>` : "");
+  ghostsByPath = Object.fromEntries(r.ghosts.map((g) => [g.path, g]));
+  [...selected].forEach((p) => { if (!ghostsByPath[p] || ghostsByPath[p].blocked) selected.delete(p); });
+  $("#content").innerHTML = `
+    ${r.qbt_ok ? "" : `<div class="banner info">No se ha podido consultar qBittorrent: el informe sale igual, pero sin saber qué torrents siguen cargados.</div>`}
+    ${verifyCard()}
+    ${diskCard(r)}
+    ${pendingCard(r)}
+    ${topCard(r)}
+    ${detailsCard(r)}`;
+  updateBulk();
+}
+function rerender() { if (lastReport) render(lastReport); }
+
+let scanning = false;
+let timer = null;
+let jumped = false;
+async function load() {
+  clearTimeout(timer);
+  if (modalOpen) {  // no redibujar con la confirmacion abierta
+    timer = setTimeout(load, 5000);
+    return;
+  }
+  try {
+    const [res] = await Promise.all([fetch("api/report", {cache: "no-store"}), loadStalled()]);
+    const s = await res.json();
+    scanning = s.scanning;
+    $("#rescan").disabled = s.scanning;
+    $("#rescan").textContent = s.scanning ? "Escaneando…" : "Volver a escanear";
+    if (s.report) {
+      const r = s.report;
+      $("#meta").textContent = `Actualizado ${ago(r.generated)} · cada ${String(r.interval_hours).replace(".", ",")} h`;
+      serviceInfo = s;
+      render(r);
+    } else {
+      $("#meta").textContent = s.error ? "Error en el escaneo" : "Primer escaneo en curso…";
+    }
+    if (s.error) $("#banner").innerHTML = `<div class="banner bad">Error en el último escaneo: ${esc(s.error)}</div>`;
+  } catch (e) {
+    $("#meta").textContent = "No se puede contactar con el servicio.";
+  }
+  // Tras importar extras, el servidor vuelve a escanear: mirar pronto para quitar la fila.
+  const extrasJustDone = Date.now() / 1000 - (serviceInfo.extras_job?.result?.at || 0) < 90;
+  timer = setTimeout(load, scanning ? 2000 : serviceInfo.downloads?.opening || extrasBusy() || extrasJustDone || updatesBusy() || verifyBusy() || appBusy() || serviceInfo.subtitles_job?.running ? 5000 : 60000);
+  // Enlace de Homer a #actualizaciones: la fila solo existe tras el primer dibujo.
+  // (la seccion esta dentro de "Detalles", plegado: abrirlo primero).
+  // Igual con #mediacenter (version nueva de MediaCenter, spec 051).
+  if (!jumped && ["#actualizaciones", "#mediacenter"].includes(location.hash) && lastReport) {
+    jumped = true;
+    view.open.add("more");
+    rerender();
+    document.getElementById(location.hash.slice(1))?.scrollIntoView();
+  }
+}
+
+$("#rescan").onclick = async () => {
+  $("#rescan").disabled = true;
+  $("#rescan").textContent = "Escaneando…";
+  await fetch("api/rescan", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"});
+  clearTimeout(timer);
+  timer = setTimeout(load, 1500);
+};
+$("#theme").value = document.documentElement.dataset.theme;
+$("#theme").onchange = (e) => {
+  const t = setTheme(e.target.value);
+  try { localStorage.setItem("disk-report-theme", t); } catch (err) { /* sin almacenamiento: solo esta visita */ }
+};
+load();
+</script>
+</body>
+</html>

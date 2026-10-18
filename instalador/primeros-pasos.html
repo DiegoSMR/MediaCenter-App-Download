@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MediaCenter: primeros pasos</title>
+<!-- Plantilla (spec 039): setup.ps1 sustituye {{IP}}, {{USUARIO}}, {{LOG}} y
+     mete dentro qrcode.js (MIT, Kazuhiko Arase). Funciona sin internet. -->
+<style>
+  :root {
+    --bg: #0d0e14; --card: #181a24; --line: rgba(127, 127, 127, 0.18);
+    --text: #e6e6ef; --title: #f4f4fb; --muted: #a3a3b8; --accent: #7c6cff; --ok: #3ecf8e; --warn: #f5b041;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Segoe UI", system-ui, sans-serif; color: var(--text); background: var(--bg); line-height: 1.55; }
+  main { max-width: 820px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { color: var(--title); font-size: 1.9rem; margin: 0 0 4px; }
+  h2 { color: var(--title); font-size: 1.2rem; margin: 0 0 8px; }
+  .sub { color: var(--muted); }
+  section { background: var(--card); border-radius: 14px; padding: 20px; margin-top: 18px; }
+  .row { display: flex; gap: 20px; align-items: center; flex-wrap: wrap; }
+  .row > div:last-child { flex: 1; min-width: 260px; }
+  .qr { background: #fff; padding: 10px; border-radius: 10px; line-height: 0; }
+  .addr { font-size: 1.3rem; font-weight: 600; color: var(--title); font-family: Consolas, monospace; }
+  a { color: #9a8dff; }
+  ol, ul { padding-left: 20px; margin: 6px 0; }
+  .ok { color: var(--ok); } .warn { color: var(--warn); }
+  code { font-family: Consolas, monospace; background: rgba(127,127,127,0.15); padding: 1px 6px; border-radius: 6px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>✅ Tu MediaCenter ya está funcionando</h1>
+  <div class="sub">Guarda esta página: tienes un acceso directo en el escritorio ("MediaCenter - Primeros pasos").</div>
+
+  <section>
+    <h2>📺 Ver películas y series en la tele o el móvil</h2>
+    <div class="row">
+      <div class="qr" id="qr-jellyfin"></div>
+      <div>
+        <ol>
+          <li>Instala la app <b>Jellyfin</b> (gratis) en la tele o el móvil: está en Google Play, App Store,
+            y en la tienda de apps de las teles Samsung, LG y Android TV.</li>
+          <li>Te pedirá la dirección del servidor. Escribe esta (o escanea el código con el móvil):<br>
+            <span class="addr">http://{{IP}}:8096</span></li>
+          <li>Entra con tu usuario <b>{{USUARIO}}</b> y la contraseña que pusiste al instalar.</li>
+        </ol>
+        <div class="sub">La tele o el móvil tienen que estar conectados al mismo WiFi que este PC.</div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>🍿 Pedir una película o una serie</h2>
+    <div class="row">
+      <div class="qr" id="qr-seerr"></div>
+      <div>
+        Abre <a href="http://{{IP}}:5055">http://{{IP}}:5055</a> (Seerr) desde el PC o el móvil, entra con tu
+        usuario, busca lo que quieras y pulsa <b>Solicitar</b>. Se descarga sola y aparece en Jellyfin
+        cuando termina (según su tamaño y tu conexión, de minutos a unas horas).
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>🧭 El panel</h2>
+    <a href="http://{{IP}}:3000">http://{{IP}}:3000</a> (acceso directo "MediaCenter" en el escritorio): todas las
+    aplicaciones, cuánto espacio queda en el disco y lo que haya que atender.
+  </section>
+
+  <section>
+    <h2>⚠️ Importante</h2>
+    <ul>
+      <li><b>El PC tiene que estar encendido</b> para descargar y para ver cosas desde la tele.
+        Si lo reinicias, <b>inicia sesión en Windows</b>: Docker y qBittorrent arrancan solos al entrar.</li>
+      <li>qBittorrent (el que descarga) funciona oculto: su icono está junto al reloj, en la barra de tareas.
+        Cerrar su ventana con la X no lo cierra, solo lo esconde. Si lo cierras del todo (clic derecho en el
+        icono → Salir), las descargas se paran; el panel tiene un botón para volver a abrirlo.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>🚀 Opcional: descargas más rápidas</h2>
+    Si tu router lo permite, abre (redirige) el puerto <code>{{PUERTO_TORRENT}}</code>, TCP y UDP, hacia la IP de este PC
+    (<code>{{IP}}</code>). Así otros pueden conectarse contigo y se descarga bastante más rápido. Se hace una vez,
+    desde la página del router (suele ser <a href="http://192.168.1.1">http://192.168.1.1</a>; usuario y
+    contraseña en una pegatina del router), en un apartado llamado "Puertos", "NAT" o "Port forwarding".
+    Si tu compañía usa CGNAT (por ejemplo Digi), no se puede, y no pasa nada: funciona igual, solo algo más lento.
+  </section>
+
+  <section>
+    <h2>🆘 Si algo no funciona</h2>
+    Vuelve a ejecutar el instalador: no borra nada y termina lo que falte. Si sigue fallando, pásale este
+    archivo a quien te lo instaló: <code>{{LOG}}</code>
+  </section>
+</main>
+<script>
+/*{{QRCODE_JS}}*/
+function pintarQR(id, texto) {
+  var q = qrcode(0, 'M');
+  q.addData(texto);
+  q.make();
+  document.getElementById(id).innerHTML = q.createSvgTag({cellSize: 4, margin: 0});
+}
+pintarQR('qr-jellyfin', 'http://{{IP}}:8096');
+pintarQR('qr-seerr', 'http://{{IP}}:5055');
+</script>
+</body>
+</html>

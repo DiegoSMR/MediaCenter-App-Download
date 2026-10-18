@@ -1,0 +1,10 @@
+# Sin esto, un "git clone" en Windows con core.autocrlf=true (el valor por
+# defecto de Git for Windows) convierte los saltos de linea de estos .sh a
+# CRLF. Los Dockerfiles de bootstrap/backup/installer copian estos scripts
+# tal cual y los ejecutan directamente (ENTRYPOINT ["/bootstrap.sh"], etc.),
+# asi que un shebang con CRLF (#!/bin/bash\r) rompe el exec dentro del
+# contenedor Linux ("no such file or directory", o "illegal option -" en
+# los que se invocan explicitamente con /bin/sh). Forzar LF aqui es lo que
+# hace que "git clone" + "docker compose up --build" funcione sin tocar la
+# config de git del usuario.
+*.sh text eol=lf
