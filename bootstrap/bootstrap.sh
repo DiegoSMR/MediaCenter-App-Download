@@ -586,12 +586,16 @@ esac
 # SUMAN a los que ya haya (opensubtitlescom necesita credenciales y se
 # configura a mano), nunca se quitan. Comprobados alcanzables desde el
 # contenedor el 2026-09-29: gestdown y subtitulamostv (series, en/es),
-# yifysubtitles (peliculas). Descartados: podnapisi y subtis (no
-# responden desde aqui), subdivx (403), subx/subdl/subsource (API key).
+# yifysubtitles (peliculas). 2026-10-19 (Bazarr 1.6.2), con opensubtitles
+# agotado y 0 resultados para una pelicula de 2025: subtitlecat (peliculas
+# y series, sin traducciones automaticas por defecto; fue el unico que la
+# encontro) y subtis (solo espanol, peliculas). Descartados: podnapisi (ya
+# no existe en 1.6.2), subf2m (522 de Cloudflare), subdivx (403),
+# subx/subdl/subsource (API key).
 # La lista se manda como campos repetidos (array_keys en app/config.py).
 log "Anadiendo proveedores de subtitulos sin cuenta en Bazarr..."
 providers=$(curl -s -H "X-API-KEY: $BAZARR_KEY" "http://bazarr:6767/api/system/settings" \
-  | jq -r '(.general.enabled_providers // []) + ["gestdown","subtitulamostv","yifysubtitles"] | unique | .[]')
+  | jq -r '(.general.enabled_providers // []) + ["gestdown","subtitulamostv","yifysubtitles","subtitlecat","subtis"] | unique | .[]')
 provider_args=()
 for p in $providers; do provider_args+=(--data-urlencode "settings-general-enabled_providers=$p"); done
 code=$(curl -s -o /tmp/resp -w "%{http_code}" -X POST "http://bazarr:6767/api/system/settings" \
